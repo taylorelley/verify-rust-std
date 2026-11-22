@@ -109,10 +109,23 @@ load with a store is rejected because the store requires the full underlying
 byte permission. These checks run alongside the constructor and public
 load/store proofs.
 
-The mixed-read result is a separation-logic proof of the raw byte
-permissions. The threaded Rust example is tested separately. A full
-reference-level proof must still connect the read-only shares to
-`&AtomicBool` and scoped threads. The current safe-method proof uses the
-writable atomic share, including for loads. The primitive specifications,
-the new fractional load contract, and the source specialization remain
-subject to independent review.
+The reference-level fixture constructs a read-only view of the same
+`&AtomicBool` layout. The atomic and ordinary reader each require half of
+the scope lifetime token and retain separate byte permissions. On scope
+exit, the fixture ends the lifetime and recovers the original initialized
+Boolean. Controls reject an attempt to end the modeled scope before the
+atomic reader runs and a store through the read-only reference.
+
+The compiled source check compares the reference cast, `as_ptr` byte read,
+and Relaxed `load` using the fork's implementations. It rejects substituting
+Acquire in the reference proof. The writable-share constructor and
+load/store proofs still run in the same replay.
+
+The reference fixture checks the two worker obligations and their scope
+lifetime. The native and Miri client uses real scoped threads. Running
+VeriFast 26.10 on `scope-api-probe.rs` demonstrates the gap in the formal
+proof. The front end rejects calls that pass closures, and the shipped
+thread specifications provide no contracts for `scope`, `spawn`, or `join`.
+The proof uses the compiler's atomic operations through the intrinsic
+contracts. Independent review of those contracts and the source
+specialization remains open.

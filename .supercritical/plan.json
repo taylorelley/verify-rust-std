@@ -18,7 +18,8 @@
     "verifast-proofs/core/sync/atomic.rs/build-store-verifast.sh",
     "verifast-proofs/core/sync/atomic.rs/check-bool-store.py",
     "verifast-proofs/core/sync/atomic.rs/bool-store.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch"
+    "verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch",
+    "verifast-proofs/core/sync/atomic.rs/scope-api-probe.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -95,6 +96,24 @@
       "requirement": "BOOL-SAFETY",
       "method": "proof",
       "criterion": "Prove coexistence and recovery of raw read permissions and reject a write with only the atomic read fraction",
+      "independent": true
+    },
+    "SCOPED-REFERENCE-PERMISSIONS": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Check reference construction, two read permissions, lifetime end and Boolean recovery, rejecting early scope end and a store",
+      "independent": true
+    },
+    "SCOPED-REFERENCE-SOURCE": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "Compare compiled reference cast and read operations with the fork and reject an ordering change",
+      "independent": true
+    },
+    "STD-SCOPED-THREADS": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Check the actual scoped-thread API including transfer of reader permissions and return at join",
       "independent": true
     }
   },

@@ -37,6 +37,10 @@ fn initialized_storage_allows_concurrent_atomic_and_ordinary_reads() {
                 let ordinary = atomic.as_ptr();
                 assert_eq!(unsafe { ordinary.read() }, initial);
             });
+            scope.spawn(move || {
+                let bytes = atomic.as_ptr().cast::<u8>();
+                assert_eq!(unsafe { bytes.read() } != 0, initial);
+            });
         });
     }
 }

@@ -157,3 +157,72 @@ unsafe fn split_and_rejoin_reads(src: *mut u8) -> (u8, u8)
     //@ std::intrinsics::open_atomic_points_to(src);
     values
 }
+
+// Convert a read fraction into a reference without granting a writable share.
+unsafe fn readonly_from_ptr<'a>(ptr: *mut bool) -> &'a AtomicBool
+//@ req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*& std::intrinsics::atomic_points_to(ptr as *u8, 1/2, accepts_u8) &*& ref_origin(ptr) == ptr;
+//@ ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*& std::intrinsics::atomic_points_to(ptr as *u8, 1/2, accepts_u8) &*& [_]frac_borrow('a, ref_initialized_(result)) &*& ref_origin(result) == ptr as *AtomicBool;
+//@ on_unwind_ens false;
+{
+    //@ let p = precreate_ref(ptr as *AtomicBool);
+    //@ open_ref_init_perm_AtomicBool(p);
+    //@ close_ref_initialized_AtomicBool(p, 1);
+    //@ close ref_initialized_::<AtomicBool>(p)();
+    //@ borrow_m('a, ref_initialized_(p));
+    //@ leak borrow_end_token('a, ref_initialized_(p));
+    //@ full_borrow_into_frac_m('a, ref_initialized_(p));
+    //@ open_frac_borrow('a, ref_initialized_(p), q);
+    //@ open [?f]ref_initialized_::<AtomicBool>(p)();
+    let result = unsafe { &*ptr.cast() };
+    //@ close [f]ref_initialized_::<AtomicBool>(p)();
+    //@ close_frac_borrow(f, ref_initialized_(p));
+    result
+}
+
+unsafe fn read_via_ref<'a>(atomic: &'a AtomicBool) -> bool
+//@ req [1/2]lifetime_token('a) &*& [_]frac_borrow('a, ref_initialized_(atomic)) &*& std::intrinsics::atomic_points_to(ref_origin(atomic) as *u8, 1/2, accepts_u8);
+//@ ens [1/2]lifetime_token('a) &*& std::intrinsics::atomic_points_to(ref_origin(atomic) as *u8, 1/2, accepts_u8);
+//@ on_unwind_ens false;
+{
+    // Read-only worker operation.
+    unsafe { intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(atomic.v.get().cast::<u8>()) != 0 }
+}
+
+unsafe fn ordinary_via_ref<'a>(atomic: &'a AtomicBool) -> bool
+//@ req [1/2]lifetime_token('a) &*& [_]frac_borrow('a, ref_initialized_(atomic)) &*& ordinary_reader(ref_origin(atomic) as *u8, ?byte);
+//@ ens [1/2]lifetime_token('a) &*& ordinary_reader(ref_origin(atomic) as *u8, byte) &*& result == (byte != 0);
+//@ on_unwind_ens false;
+{
+    let ptr: *mut bool = atomic.v.get().cast();
+    //@ open ordinary_reader(ref_origin(atomic) as *u8, byte);
+    let result = unsafe { *ptr.cast::<u8>() != 0 };
+    //@ close ordinary_reader(ref_origin(atomic) as *u8, byte);
+    result
+}
+
+unsafe fn scoped_read_permissions(ptr: *mut bool) -> (bool, bool)
+//@ req atomic_mask(MaskTop) &*& *ptr |-> ?initial &*& ref_origin(ptr) == ptr;
+//@ ens atomic_mask(MaskTop) &*& *ptr |-> initial &*& result.0 == initial;
+//@ on_unwind_ens false;
+{
+    //@ points_to_bool_to_u8(ptr);
+    //@ let src = ptr as *u8;
+    //@ close ordinary_reader(src, if initial { 1 } else { 0 });
+    //@ std::intrinsics::atomic_align_of_u8();
+    //@ div_rem(src as usize, 1);
+    //@ std::intrinsics::close_atomic_points_to_m(src, accepts_u8);
+    //@ let k = begin_lifetime_m();
+    let values;
+    {
+        //@ let_lft 'scope = k;
+        let reference = unsafe { readonly_from_ptr/*@::<'scope>@*/(ptr) };
+        let ordinary = unsafe { ordinary_via_ref/*@::<'scope>@*/(reference) };
+        let atomic = unsafe { read_via_ref/*@::<'scope>@*/(reference) };
+        values = (ordinary, atomic);
+    }
+    //@ end_lifetime_m(k);
+    //@ std::intrinsics::open_atomic_points_to(src);
+    //@ open ordinary_reader(src, if initial { 1 } else { 0 });
+    //@ points_to_u8_to_bool(src);
+    values
+}

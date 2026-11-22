@@ -23,6 +23,20 @@ pub fn sc_verify_bool_load(a: &AtomicBool, order: Ordering) -> u8 {
     a.load(order) as u8 + 2
 }
 """
+SCOPE_BRIDGE = """
+#[unsafe(no_mangle)]
+pub unsafe fn sc_verify_bool_scope(ptr: *mut bool) -> (bool, bool) {
+    let reference = unsafe { AtomicBool::from_ptr(ptr) };
+    let ordinary = unsafe { *reference.as_ptr().cast::<u8>() != 0 };
+    (ordinary, reference.load(Ordering::Relaxed))
+}
+"""
+SPECIALIZED_SCOPE_BRIDGE = """
+#[unsafe(no_mangle)]
+pub unsafe fn sc_verify_bool_scope(ptr: *mut bool) -> (bool, bool) {
+    unsafe { scoped_read_permissions(ptr) }
+}
+"""
 RUST_FLAGS = "--edition=2024 --crate-type=lib"
 RELAXED = "{ AO::Relaxed }, false>(dst, val)"
 RELAXED_LOAD = "{ AO::Relaxed }, false>(src)"
@@ -50,6 +64,13 @@ def normalize_dispatch(ir, operation):
     if operation == "load":
         text = re.sub(r"%(?:_0|value)\.sroa\.0\.0\.i\b", "%loaded", text)
         text = re.sub(r"%(?:_4\.not|_0\.i\.not)\b", "%is_zero", text)
+    if operation == "scope":
+        # Rename only SSA definitions and their uses in this straight-line
+        # wrapper. Keep the pointer, operand graph and memory operations.
+        names = re.findall(r"(?m)^  (%[\w.]+) = ", text)
+        canonical = {name: f"%ssa{index}" for index, name in enumerate(names)}
+        text = re.sub(r"%[\w.]+", lambda match: canonical.get(match[0], match[0]), text)
+        text = re.sub(r"!noundef !\d+", "!noundef !id", text)
     return text
 
 
@@ -98,7 +119,7 @@ def main():
             shutil.copyfile(document, work / document.name)
         normalized = re.sub(r"(?m)^#\[rustc_diagnostic_item = ", "#[doc = ", atomic.decode())
         (work / "atomic.rs").write_text(normalized + constructor["LAYOUT"] +
-            BRIDGE.replace("#[unsafe(no_mangle)]",
+            (BRIDGE + SCOPE_BRIDGE).replace("#[unsafe(no_mangle)]",
                            '#[stable(feature = "atomic_source_proof", since = "1.0.0")]\n#[unsafe(no_mangle)]'))
         original = work / "lib.rs"
         original.write_text(runpy.run_path(str(here / "probe-verifast.py"))["CRATE"])
@@ -110,23 +131,29 @@ def main():
                                   crate, "-o", ir], logs / (label + "-rustc.log"))
             if status:
                 raise SystemExit(output)
-            return {op: normalize_dispatch(ir.read_text(), op) for op in ("load", "store")}
+            return {op: normalize_dispatch(ir.read_text(), op) for op in ("load", "store", "scope")}
 
         original_dispatch = compile_dispatch(original, "original-store")
-        proof.write_text(proof_text + constructor["LAYOUT"] + BRIDGE)
+        proof.write_text(proof_text + constructor["LAYOUT"] + BRIDGE + SPECIALIZED_SCOPE_BRIDGE)
         specialized_dispatch = compile_dispatch(proof, "specialized-store")
         if (specialized_dispatch != original_dispatch
                 or not all(op in original_dispatch["store"] for op in EXPECTED_STORES)
                 or not all(op in original_dispatch["load"] for op in EXPECTED_LOADS)
-                or any(body.count("tail call void") != 2 for body in original_dispatch.values())):
-            raise SystemExit("Current and specialized load/store dispatches do not match")
-        proof.write_text(replace(proof_text, RELAXED, RELAXED.replace("Relaxed", "Release")) + BRIDGE)
+                or any(original_dispatch[op].count("tail call void") != 2 for op in ("load", "store"))):
+            raise SystemExit("Current and specialized Boolean dispatches do not match")
+        proof.write_text(replace(proof_text, RELAXED, RELAXED.replace("Relaxed", "Release")) + BRIDGE + SPECIALIZED_SCOPE_BRIDGE)
         if compile_dispatch(proof, "wrong-order-store") == original_dispatch:
             raise SystemExit("The source comparison accepted a changed ordering")
 
-        proof.write_text(replace(proof_text, RELAXED_LOAD, RELAXED_LOAD.replace("Relaxed", "Acquire")) + BRIDGE)
+        proof.write_text(replace(proof_text, RELAXED_LOAD, RELAXED_LOAD.replace("Relaxed", "Acquire")) + BRIDGE + SPECIALIZED_SCOPE_BRIDGE)
         if compile_dispatch(proof, "wrong-order-load")["load"] == original_dispatch["load"]:
             raise SystemExit("The source comparison accepted a changed load ordering")
+
+        reference_load = "intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(atomic.v.get().cast::<u8>())"
+        wrong_reference_order = replace(proof_text, reference_load, reference_load.replace("Relaxed", "Acquire"))
+        proof.write_text(wrong_reference_order + BRIDGE + SPECIALIZED_SCOPE_BRIDGE)
+        if compile_dispatch(proof, "wrong-scope-order")["scope"] == original_dispatch["scope"]:
+            raise SystemExit("The source comparison accepted a changed reference load ordering")
 
         verifier = [runtime / "verifast", "-verbose", "1", "-skip_specless_fns",
                     "-rustc_args", RUST_FLAGS]
@@ -137,6 +164,8 @@ def main():
             "Verifying function 'atomic_store'", "Verifying function 'AtomicBool::load'",
             "Verifying function 'atomic_load'", "Verifying function 'mixed_reads'",
             "Verifying function 'split_and_rejoin_reads'",
+            "Verifying function 'readonly_from_ptr'", "Verifying function 'read_via_ref'",
+            "Verifying function 'ordinary_via_ref'", "Verifying function 'scoped_read_permissions'",
             "target: x86_64-unknown-linux-gnu",
         )):
             raise SystemExit("Boolean load/store proof or coverage failed. See store-proof.log")
@@ -148,6 +177,12 @@ def main():
             ("invalid-byte", RELAXED, RELAXED.replace("dst, val", "dst, 2"), "Cannot prove condition"),
             ("volatile-load", RELAXED_LOAD, RELAXED_LOAD.replace("false", "true"), "only ordinary accesses"),
             ("release-load", RELAXED_LOAD, RELAXED_LOAD.replace("Relaxed", "Release"), "unsupported ordering"),
+            ("ended-scope", "        let atomic = unsafe { read_via_ref",
+             "        //@ end_lifetime_m(k);\n        let atomic = unsafe { read_via_ref",
+             "No matching heap chunks: lifetime_token"),
+            ("reference-write", reference_load,
+             "({ intrinsics::atomic_store::<u8, { AO::Relaxed }, false>(atomic.v.get().cast::<u8>(), 1); 1 })",
+             "No matching heap chunks: [_]std::intrinsics::atomic_points_to"),
             ("mixed-read-write", mixed_load,
              "{ intrinsics::atomic_store::<u8, { AO::Relaxed }, false>(src, ordinary); ordinary }",
              "No matching heap chunks: [_]std::intrinsics::atomic_points_to"),
@@ -158,7 +193,7 @@ def main():
             if not status or diagnostic not in output:
                 raise SystemExit(f"Unexpected control result. See {name}.log")
     print("Verified ordinary Boolean load and store, including their unwind paths.")
-    print("Current and specialized LLVM dispatches matched, and all controls passed.")
+    print("Current and specialized LLVM dispatches and scoped reads matched. All controls passed.")
 
 
 if __name__ == "__main__":
