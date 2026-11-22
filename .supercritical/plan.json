@@ -11,7 +11,10 @@
     "verifast-proofs/core/sync/atomic.rs/probe-verifast.py",
     "verifast-proofs/core/sync/atomic.rs/projection.rs",
     "verifast-proofs/core/sync/atomic.rs/README.md",
-    "rust-toolchain.toml"
+    "rust-toolchain.toml",
+    "verifast-proofs/core/sync/atomic.rs/bool-constructor.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-bool-constructor.py",
+    "verifast-proofs/core/sync/atomic.rs/store-const-ordering.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -46,6 +49,24 @@
       "requirement": "BOOL-SAFETY",
       "method": "review",
       "criterion": "Review the ordinary store intrinsic contracts and tool assumptions",
+      "independent": true
+    },
+    "SPECIALIZED-CONSTRUCTOR": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Prove Boolean constructor fresh and shared cases for the specialized layout and reject invalid controls",
+      "independent": true
+    },
+    "CONSTRUCTOR-SOURCE": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "Compare specialized and original constructor layouts and MIR, rejecting a change to the pointer computation",
+      "independent": true
+    },
+    "ORDINARY-STORE": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Prove the current ordinary Boolean store including its intrinsic ordering and volatility arguments",
       "independent": true
     }
   },

@@ -63,6 +63,7 @@ def main():
             run([*verifier, control], logs / "concrete-layout.log"),
             run([*verifier, projection], logs / "associated-layout.log"),
             run([*verifier, crate], logs / "current-source.log"),
+            run([*verifier, here / "store-const-ordering.rs"], logs / "store-const-ordering.log"),
             run([runtime / "refinement-checker", "--verbose", "0", "--rustc-args",
                  RUST_FLAGS, crate, crate], logs / "identity-refinement.log"),
         ]

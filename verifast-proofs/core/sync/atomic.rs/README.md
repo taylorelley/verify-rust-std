@@ -43,19 +43,36 @@ and the minimal associated-type example fail before proof with
 `sizedness_of_type: TODO: projection types`. The compiler has accepted the source
 by this stage. The identity refinement check is a tool sanity check.
 
-## Proof obligations
+## Specialized Boolean constructor
 
-The proposed Boolean argument uses a lifetime-bound share over the byte range,
-an initialized value in `{0, 1}`, and the permission required to write through the
-three ordinary store intrinsics. It must establish permission recovery and
-compatibility with documented read/read sharing. The proof must reject conflicting
-ordinary access, invalid Boolean bytes, and outliving the backing allocation.
-The solver must exercise those controls and identify why each is rejected.
+Run the constructor check with VeriFast 26.10, its September nightly, and the
+fork's November nightly for compiler comparison:
 
-The missing verifier feature is associated-type projection in struct fields.
-A workable alternative could specialize the proof input to `Atomic<bool>`.
-This requires a separately checked connection for concrete layout, field and
-pointer projections, lifetimes, and ordinary intrinsic calls at the selected
-target. The historical source hash and the current identity refinement check
-provide no such connection. The Supercritical plan keeps the Boolean permission
-proof and primitive boundary review open.
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25   python3 "$proof/check-bool-constructor.py" /path/to/verifast-26.10/bin   "$rustc_path" /tmp/challenge-7-constructor
+```
+
+VeriFast checks the fresh conversion, reuse of an existing lifetime-bound
+share, a caller that exercises both branches, and preservation of valid Boolean
+bytes when the borrow is restored. It rejects claiming fresh ownership twice,
+reusing a share without permission, and passing uninitialized storage.
+
+The source comparison pins the fork atomic module and checks size, alignment,
+and field offset on both Rust types. It compares compiler-generated runtime and
+const-evaluation MIR, disregarding debug information and mapping the two names
+of the concrete Boolean atomic type. The comparison rejects an altered pointer
+computation. This is a targeted constructor check for Linux x86-64, pending
+review of the source transfer and trusted model. The documented read/read case
+is still covered only by concrete testing.
+
+## Ordinary store
+
+The reduced `store-const-ordering.rs` probe reaches an additional VeriFast
+26.10 failure. The frontend reports `Unsupported constant value tree` on the
+enum-valued ordering argument to the current intrinsic. To finish the ordinary
+store proof, the verifier needs a checked treatment of that argument and the
+`false` volatility parameter. Verify the three legal branches and handle the
+two panic branches without weakening the public specification. The
+Supercritical plan tracks the remaining store proof, the complete permission
+contract, and primitive boundary review.
