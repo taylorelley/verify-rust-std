@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "intended_use": "Verify the ordinary Boolean atomic API on the current challenge source",
+  "approval_basis": "Verify Rust Std Lib Challenge 7",
+  "target": "Current verify-rust-std atomic implementation, Linux x86-64 initial diagnostic target",
+  "files": [
+    "library/core/src/sync/atomic.rs",
+    "library/core/src/intrinsics/mod.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-bool-clients.py",
+    "verifast-proofs/core/sync/atomic.rs/bool-clients.rs",
+    "verifast-proofs/core/sync/atomic.rs/probe-verifast.py",
+    "verifast-proofs/core/sync/atomic.rs/projection.rs",
+    "verifast-proofs/core/sync/atomic.rs/README.md",
+    "rust-toolchain.toml"
+  ],
+  "requirements": {
+    "BOOL-SAFETY": {
+      "source": "Challenge 7 Parts 1 to 3",
+      "behavior": "The Boolean conversion and ordinary store preserve lifetime and memory safety under the documented access rules",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    }
+  },
+  "obligations": {
+    "LEGAL-CLIENTS": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "Concrete documented legal Boolean clients complete under the matching nightly",
+      "independent": true
+    },
+    "VERIFIER-SOURCE": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "The verifier processes the current source or a mechanically justified specialization",
+      "independent": true
+    },
+    "BOOL-PERMISSIONS": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Current-source proofs and controls establish lifetime, validity and race freedom",
+      "independent": true
+    },
+    "PRIMITIVE-BOUNDARY": {
+      "requirement": "BOOL-SAFETY",
+      "method": "review",
+      "criterion": "Review the ordinary store intrinsic contracts and tool assumptions",
+      "independent": true
+    }
+  },
+  "decisions": {}
+}
