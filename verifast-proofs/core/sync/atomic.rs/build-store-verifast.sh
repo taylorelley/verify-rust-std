@@ -53,4 +53,6 @@ git -C source apply "$proof_dir/verifast-26.10-u8-store.patch"
 (cd source/src && dune build vfconsole/vfconsole.exe)
 rm -- "$runtime/verifast"
 cp source/src/_build/default/vfconsole/vfconsole.exe "$runtime/verifast"
+rm -- "$runtime/rust/std/lib.rsspec"
+cp source/bin/rust/std/lib.rsspec "$runtime/rust/std/lib.rsspec"
 printf 'Run the patched binary with LD_LIBRARY_PATH=%s\n' "$runtime:$deps/lib"

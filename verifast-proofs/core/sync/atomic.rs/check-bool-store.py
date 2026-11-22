@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify ordinary Boolean stores and compare both executable dispatches."""
+"""Verify ordinary Boolean atomic loads and stores and compare both executable dispatches."""
 
 import argparse
 import hashlib
@@ -17,18 +17,27 @@ pub fn sc_verify_bool_store(a: &AtomicBool, value: bool, order: Ordering) -> boo
     a.store(value, order);
     value
 }
+
+#[unsafe(no_mangle)]
+pub fn sc_verify_bool_load(a: &AtomicBool, order: Ordering) -> u8 {
+    a.load(order) as u8 + 2
+}
 """
 RUST_FLAGS = "--edition=2024 --crate-type=lib"
 RELAXED = "{ AO::Relaxed }, false>(dst, val)"
-EXPECTED = ("atomic i8 %_6, ptr %a monotonic, align 1",
+RELAXED_LOAD = "{ AO::Relaxed }, false>(src)"
+EXPECTED_LOADS = ("load atomic i8, ptr %a monotonic, align 1",
+                  "load atomic i8, ptr %a acquire, align 1",
+                  "load atomic i8, ptr %a seq_cst, align 1")
+EXPECTED_STORES = ("atomic i8 %_6, ptr %a monotonic, align 1",
             "atomic i8 %_6, ptr %a release, align 1",
             "atomic i8 %_6, ptr %a seq_cst, align 1")
 
 
-def normalize_dispatch(ir):
-    match = re.search(r"(?m)^define [^\n]*@sc_verify_bool_store\([^\n]*\{\n.*?^\}", ir, re.S | re.M)
+def normalize_dispatch(ir, operation):
+    match = re.search(rf"^define [^\n]*@sc_verify_bool_{operation}\([^\n]*\{{\n.*?^\}}", ir, re.S | re.M)
     if not match:
-        raise SystemExit("The compiler did not emit the inline store dispatch")
+        raise SystemExit("The compiler did not emit the inline atomic dispatch")
     # Normalize names and metadata. Retain the instruction operands, edges,
     # atomic ordering, volatility, alignment and panic message allocation.
     text = re.sub(r"(?m)\s*;[^\n]*$", "", match[0])
@@ -38,6 +47,9 @@ def normalize_dispatch(ir):
     text = re.sub(r" !prof !\d+", "", text)
     text = re.sub(r" #\d+(?=\s|$)", "", text)
     text = re.sub(r"dereferenceable\(24\) @alloc_[0-9a-f]+", "dereferenceable(24) @location", text)
+    if operation == "load":
+        text = re.sub(r"%(?:_0|value)\.sroa\.0\.0\.i\b", "%loaded", text)
+        text = re.sub(r"%(?:_4\.not|_0\.i\.not)\b", "%is_zero", text)
     return text
 
 
@@ -86,7 +98,8 @@ def main():
             shutil.copyfile(document, work / document.name)
         normalized = re.sub(r"(?m)^#\[rustc_diagnostic_item = ", "#[doc = ", atomic.decode())
         (work / "atomic.rs").write_text(normalized + constructor["LAYOUT"] +
-            '\n#[stable(feature = "atomic_source_proof", since = "1.0.0")]' + BRIDGE)
+            BRIDGE.replace("#[unsafe(no_mangle)]",
+                           '#[stable(feature = "atomic_source_proof", since = "1.0.0")]\n#[unsafe(no_mangle)]'))
         original = work / "lib.rs"
         original.write_text(runpy.run_path(str(here / "probe-verifast.py"))["CRATE"])
         proof = work / "proof.rs"
@@ -97,18 +110,23 @@ def main():
                                   crate, "-o", ir], logs / (label + "-rustc.log"))
             if status:
                 raise SystemExit(output)
-            return normalize_dispatch(ir.read_text())
+            return {op: normalize_dispatch(ir.read_text(), op) for op in ("load", "store")}
 
         original_dispatch = compile_dispatch(original, "original-store")
         proof.write_text(proof_text + constructor["LAYOUT"] + BRIDGE)
         specialized_dispatch = compile_dispatch(proof, "specialized-store")
         if (specialized_dispatch != original_dispatch
-                or not all(op in original_dispatch for op in EXPECTED)
-                or original_dispatch.count("tail call void") != 2):
-            raise SystemExit("Current and specialized store dispatches do not match")
+                or not all(op in original_dispatch["store"] for op in EXPECTED_STORES)
+                or not all(op in original_dispatch["load"] for op in EXPECTED_LOADS)
+                or any(body.count("tail call void") != 2 for body in original_dispatch.values())):
+            raise SystemExit("Current and specialized load/store dispatches do not match")
         proof.write_text(replace(proof_text, RELAXED, RELAXED.replace("Relaxed", "Release")) + BRIDGE)
         if compile_dispatch(proof, "wrong-order-store") == original_dispatch:
             raise SystemExit("The source comparison accepted a changed ordering")
+
+        proof.write_text(replace(proof_text, RELAXED_LOAD, RELAXED_LOAD.replace("Relaxed", "Acquire")) + BRIDGE)
+        if compile_dispatch(proof, "wrong-order-load")["load"] == original_dispatch["load"]:
+            raise SystemExit("The source comparison accepted a changed load ordering")
 
         verifier = [runtime / "verifast", "-verbose", "1", "-skip_specless_fns",
                     "-rustc_args", RUST_FLAGS]
@@ -116,20 +134,30 @@ def main():
         status, output = run([*verifier, proof], logs / "store-proof.log", env)
         if status or not all(marker in output for marker in (
             "0 errors found", "Verifying function 'AtomicBool::store'",
-            "Verifying function 'atomic_store'", "target: x86_64-unknown-linux-gnu",
+            "Verifying function 'atomic_store'", "Verifying function 'AtomicBool::load'",
+            "Verifying function 'atomic_load'", "Verifying function 'mixed_reads'",
+            "Verifying function 'split_and_rejoin_reads'",
+            "target: x86_64-unknown-linux-gnu",
         )):
-            raise SystemExit("Store proof or coverage failed. See store-proof.log")
+            raise SystemExit("Boolean load/store proof or coverage failed. See store-proof.log")
 
-        for name, replacement, diagnostic in (
-            ("volatile", RELAXED.replace("false", "true"), "only ordinary stores"),
-            ("acquire", RELAXED.replace("Relaxed", "Acquire"), "unsupported ordering"),
-            ("invalid-byte", RELAXED.replace("dst, val", "dst, 2"), "Cannot prove condition"),
+        mixed_load = "intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(src as *const u8)"
+        for name, anchor, replacement, diagnostic in (
+            ("volatile", RELAXED, RELAXED.replace("false", "true"), "only ordinary accesses"),
+            ("acquire", RELAXED, RELAXED.replace("Relaxed", "Acquire"), "unsupported ordering"),
+            ("invalid-byte", RELAXED, RELAXED.replace("dst, val", "dst, 2"), "Cannot prove condition"),
+            ("volatile-load", RELAXED_LOAD, RELAXED_LOAD.replace("false", "true"), "only ordinary accesses"),
+            ("release-load", RELAXED_LOAD, RELAXED_LOAD.replace("Relaxed", "Release"), "unsupported ordering"),
+            ("mixed-read-write", mixed_load,
+             "{ intrinsics::atomic_store::<u8, { AO::Relaxed }, false>(src, ordinary); ordinary }",
+             "No matching heap chunks: [_]std::intrinsics::atomic_points_to"),
+
         ):
-            proof.write_text(replace(proof_text, RELAXED, replacement))
+            proof.write_text(replace(proof_text, anchor, replacement))
             status, output = run([*verifier, proof], logs / (name + ".log"), env)
             if not status or diagnostic not in output:
                 raise SystemExit(f"Unexpected control result. See {name}.log")
-    print("Verified ordinary Boolean store and both unwind paths.")
+    print("Verified ordinary Boolean load and store, including their unwind paths.")
     print("Current and specialized LLVM dispatches matched, and all controls passed.")
 
 

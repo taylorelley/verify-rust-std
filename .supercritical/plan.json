@@ -78,6 +78,24 @@
       "method": "test",
       "criterion": "Compare the current and specialized store layout and compiled dispatch, rejecting a changed ordering",
       "independent": true
+    },
+    "ORDINARY-LOAD": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Prove ordinary Boolean loads including all three legal orderings and both panic paths",
+      "independent": true
+    },
+    "LOAD-SOURCE": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "Compare compiled current and specialized Boolean load dispatch and reject a changed ordering",
+      "independent": true
+    },
+    "MIXED-BYTE-PERMISSIONS": {
+      "requirement": "BOOL-SAFETY",
+      "method": "proof",
+      "criterion": "Prove coexistence and recovery of raw read permissions and reject a write with only the atomic read fraction",
+      "independent": true
     }
   },
   "decisions": {}

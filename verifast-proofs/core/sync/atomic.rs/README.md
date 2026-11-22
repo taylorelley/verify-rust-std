@@ -1,7 +1,7 @@
 # Challenge 7 Boolean verification
 
 This branch starts the current-source proof of `AtomicBool::from_ptr` and ordinary
-`AtomicBool::store`. The runtime implementation remains the challenge fork's.
+`AtomicBool::load` and `AtomicBool::store`. The runtime implementation remains the challenge fork's.
 
 ## Historical result
 
@@ -26,8 +26,8 @@ python3 "$proof/check-bool-clients.py" "$(rustup which rustc)"
 
 The script compares the fork atomic module and relevant intrinsic declarations
 with the compiler's source before running the client tests. The clients cover
-both Boolean inputs, the three valid store orderings, ordinary access after
-join, concurrent ordinary and atomic reads, and the two invalid store orderings.
+both Boolean inputs, the valid load and store orderings, ordinary access after
+join, concurrent ordinary and atomic reads, and the invalid load and store orderings.
 This is concrete test evidence.
 
 For the VeriFast 26.10 front-end probe, use the verifier's nightly
@@ -64,16 +64,17 @@ and field offset on both Rust types. It compares compiler-generated runtime and
 const-evaluation MIR, disregarding debug information and mapping the two names
 of the concrete Boolean atomic type. The comparison rejects an altered pointer
 computation. This is a targeted constructor check for Linux x86-64, pending
-review of the source transfer and trusted model. The documented read/read case
-is still covered only by concrete testing.
+review of the source transfer and trusted model. The constructor part covers a writable atomic share.
+The raw-byte read permission checks are described below.
 
-## Ordinary store
+## Ordinary load and store
 
 VeriFast 26.10 fails on the enum-valued const argument in the reduced
 `store-const-ordering.rs` probe. The checked patch extends the frontend at the
 direct intrinsic call. It verifies the operand type is `u8`, accepts only the
-three legal store orderings and `VOLATILE = false`, and dispatches to the
-corresponding built-in store specification. Those specifications consume an
+three legal orderings for each operation and `VOLATILE = false`, and dispatches to the
+corresponding primitive specification. The patch adds load specifications
+that preserve the supplied byte permission and return a value satisfying its invariant. Those specifications consume an
 atomic permission for the destination and require that the stored byte
 satisfies its invariant. The compiler's atomic primitive remains trusted.
 
@@ -85,20 +86,33 @@ bash "$proof/build-store-verifast.sh" /tmp/challenge-7-verifast-build
 RUSTUP_TOOLCHAIN=nightly-2026-09-25   python3 "$proof/check-bool-store.py"   /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path"   /tmp/challenge-7-store
 ```
 
-The specialized helper opens its shared atomic permission only on paths that
-call the non-unwinding primitive. The `Acquire` and `AcqRel` panic branches
-preserve the thread and lifetime tokens. The verifier checks the public store
-contract using the semantic interpretation of its safe Rust signature.
+The specialized helpers open the shared atomic permission only on paths that
+call a non-unwinding primitive. The Release and AcqRel load panics and the
+Acquire and AcqRel store panics preserve the thread and lifetime tokens.
+The verifier checks the public methods against their safe Rust signatures.
 
 The source check pins the original atomic module and the relevant intrinsic
 declarations. It checks concrete layout and compares the inlined LLVM
 dispatch for this target, including the stored byte, destination, each
 ordering, and panic edges. The comparison normalizes compiler-generated
-names, metadata, and panic source locations. Changing the Relaxed branch to
-Release must fail the comparison. The patched verifier must reject a volatile
-call, an Acquire store intrinsic, and a store of byte 2 under the Boolean
-invariant.
+names, metadata, and panic source locations. Changing Relaxed to Acquire for a load or Release for a store must fail the
+comparison. Negative controls cover volatile calls, Release load and
+Acquire store intrinsics, and storing byte 2 under the Boolean invariant.
 
-Independent review of the source specialization and primitive model remains
-open. The current proof uses a writable atomic share and does not establish
-the separate contract for mixed atomic and ordinary read-only access.
+## Mixed access permissions
+
+The raw-byte proof splits one initialized Boolean byte into two read shares.
+One reader keeps an ordinary points-to fraction while the other converts its
+fraction to an atomic permission and loads through it. The proof recombines
+both halves to recover the original initialized byte. Replacing the atomic
+load with a store is rejected because the store requires the full underlying
+byte permission. These checks run alongside the constructor and public
+load/store proofs.
+
+The mixed-read result is a separation-logic proof of the raw byte
+permissions. The threaded Rust example is tested separately. A full
+reference-level proof must still connect the read-only shares to
+`&AtomicBool` and scoped threads. The current safe-method proof uses the
+writable atomic share, including for loads. The primitive specifications,
+the new fractional load contract, and the source specialization remain
+subject to independent review.

@@ -15,6 +15,19 @@ pub enum Ordering {
 }
 
 // STORE METHOD
+    pub const fn load<'a>(&'a self, order: Ordering) -> bool
+    //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<AtomicBool>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
+    //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    //@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    {
+        unsafe {
+            //@ leak <Ordering>.own(_, _);
+            //@ close exists::<*AtomicBool>(self);
+            //@ close exists::<lifetime_t>('a);
+            atomic_load(self.v.get().cast::<u8>(), order) != 0
+        }
+    }
+
     pub const fn store<'a>(&'a self, val: bool, order: Ordering)
     //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<AtomicBool>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
     //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
@@ -70,4 +83,77 @@ const unsafe fn atomic_store(dst: *mut u8, val: u8, order: Ordering)
             AcqRel => panic!("there is no such thing as an acquire-release store"),
         }
     }
+}
+
+// Keep the lifetime token available on any branch that can unwind.
+const unsafe fn atomic_load(src: *const u8, order: Ordering) -> u8
+//@ req thread_token(currentThread) &*& exists::<*AtomicBool>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]AtomicBool_share(k, currentThread, atomic) &*& src == ref_origin(atomic) as *const u8;
+//@ ens thread_token(currentThread) &*& [q]lifetime_token(k) &*& accepts_u8(result) == true;
+//@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token(k);
+{
+    //@ open exists::<*AtomicBool>(atomic);
+    //@ open exists::<lifetime_t>(k);
+    unsafe {
+        match order {
+            Relaxed => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(src as *u8), q);
+                //@ open [?f]own_atomic_contents(src as *u8)();
+                let value = intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(src);
+                //@ close [f]own_atomic_contents(src as *u8)();
+                //@ close_frac_borrow(f, own_atomic_contents(src as *u8));
+                value
+            }
+            Acquire => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(src as *u8), q);
+                //@ open [?f]own_atomic_contents(src as *u8)();
+                let value = intrinsics::atomic_load::<u8, { AO::Acquire }, false>(src);
+                //@ close [f]own_atomic_contents(src as *u8)();
+                //@ close_frac_borrow(f, own_atomic_contents(src as *u8));
+                value
+            }
+            SeqCst => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(src as *u8), q);
+                //@ open [?f]own_atomic_contents(src as *u8)();
+                let value = intrinsics::atomic_load::<u8, { AO::SeqCst }, false>(src);
+                //@ close [f]own_atomic_contents(src as *u8)();
+                //@ close_frac_borrow(f, own_atomic_contents(src as *u8));
+                value
+            }
+            Release => panic!("there is no such thing as a release load"),
+            AcqRel => panic!("there is no such thing as an acquire-release load"),
+        }
+    }
+}
+
+//@ pred ordinary_reader(src: *u8; byte: u8) = [1/2](*src |-> byte);
+
+// Keep the ordinary reader's half separate while using the atomic half.
+// The caller supplies both read permissions for one initialized Boolean byte.
+unsafe fn mixed_reads(src: *mut u8) -> (u8, u8)
+//@ req atomic_mask(MaskTop) &*& ordinary_reader(src, ?byte) &*& [1/2](*src |-> byte) &*& accepts_u8(byte) == true;
+//@ ens atomic_mask(MaskTop) &*& [1/2](*src |-> byte) &*& std::intrinsics::atomic_points_to(src, 1/2, accepts_u8) &*& result.0 == byte &*& accepts_u8(result.1) == true;
+//@ on_unwind_ens false;
+{
+    //@ std::intrinsics::atomic_align_of_u8();
+    //@ div_rem(src as usize, 1);
+    //@ std::intrinsics::close_atomic_points_to_m(src, accepts_u8);
+    //@ open ordinary_reader(src, byte);
+    let ordinary = unsafe { *src };
+    let atomic = unsafe { intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(src as *const u8) };
+    (ordinary, atomic)
+}
+
+// Start from one owned byte and recover ownership after both reads.
+unsafe fn split_and_rejoin_reads(src: *mut u8) -> (u8, u8)
+//@ req atomic_mask(MaskTop) &*& *src |-> ?byte &*& accepts_u8(byte) == true;
+//@ ens atomic_mask(MaskTop) &*& *src |-> byte &*& result.0 == byte &*& accepts_u8(result.1) == true;
+//@ on_unwind_ens false;
+{
+    //@ close ordinary_reader(src, byte);
+    let values = unsafe { mixed_reads(src) };
+    //@ std::intrinsics::open_atomic_points_to(src);
+    values
 }

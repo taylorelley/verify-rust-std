@@ -30,7 +30,9 @@ fn initialized_storage_allows_concurrent_atomic_and_ordinary_reads() {
         let mut backing = initial;
         thread::scope(|scope| {
             let atomic = unsafe { AtomicBool::from_ptr(&raw mut backing) };
-            scope.spawn(move || assert_eq!(atomic.load(Ordering::Relaxed), initial));
+            for order in [Ordering::Relaxed, Ordering::Acquire, Ordering::SeqCst] {
+                scope.spawn(move || assert_eq!(atomic.load(order), initial));
+            }
             scope.spawn(move || {
                 let ordinary = atomic.as_ptr();
                 assert_eq!(unsafe { ordinary.read() }, initial);
@@ -46,6 +48,17 @@ fn invalid_store_orderings_panic_before_changing_storage() {
         for order in [Ordering::Acquire, Ordering::AcqRel] {
             let result = std::panic::catch_unwind(|| atomic.store(!initial, order));
             assert!(result.is_err());
+            assert_eq!(atomic.load(Ordering::Relaxed), initial);
+        }
+    }
+}
+
+#[test]
+fn invalid_load_orderings_panic_before_returning_a_value() {
+    for initial in [false, true] {
+        let atomic = AtomicBool::new(initial);
+        for order in [Ordering::Release, Ordering::AcqRel] {
+            assert!(std::panic::catch_unwind(|| atomic.load(order)).is_err());
             assert_eq!(atomic.load(Ordering::Relaxed), initial);
         }
     }
