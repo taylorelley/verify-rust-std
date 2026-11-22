@@ -14,7 +14,11 @@
     "rust-toolchain.toml",
     "verifast-proofs/core/sync/atomic.rs/bool-constructor.rs",
     "verifast-proofs/core/sync/atomic.rs/check-bool-constructor.py",
-    "verifast-proofs/core/sync/atomic.rs/store-const-ordering.rs"
+    "verifast-proofs/core/sync/atomic.rs/store-const-ordering.rs",
+    "verifast-proofs/core/sync/atomic.rs/build-store-verifast.sh",
+    "verifast-proofs/core/sync/atomic.rs/check-bool-store.py",
+    "verifast-proofs/core/sync/atomic.rs/bool-store.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -67,6 +71,12 @@
       "requirement": "BOOL-SAFETY",
       "method": "proof",
       "criterion": "Prove the current ordinary Boolean store including its intrinsic ordering and volatility arguments",
+      "independent": true
+    },
+    "STORE-SOURCE": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "Compare the current and specialized store layout and compiled dispatch, rejecting a changed ordering",
       "independent": true
     }
   },

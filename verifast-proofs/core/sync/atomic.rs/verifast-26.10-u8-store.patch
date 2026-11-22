@@ -1,0 +1,74 @@
+--- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
++++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+@@ -1456,6 +1456,43 @@
+         "std::mem::ManuallyDrop::deref_mut"
+     | _ -> name
+ 
++  (* Select the existing primitive contract for the compiler's concrete
++     ordinary u8 stores. Other widths and volatile stores need their own
++     review and are deliberately rejected by this narrow proof frontend. *)
++  and specialize_u8_atomic_store (fn_ty : D.ty_kind_fn_def_ty) loc =
++    match fn_ty.id.name with
++    | "core::intrinsics::atomic_store" | "std::intrinsics::atomic_store" ->
++        let reject reason = Ast.static_error loc ("atomic_store: " ^ reason) None in
++        (match fn_ty.substs with
++        | [
++            ({kind = Type {kind = UInt U8}} as operand);
++            {kind = Const {kind = Value {
++               ty = {kind = Adt {
++                 id = {name = ("core::intrinsics::AtomicOrdering" |
++                               "std::intrinsics::AtomicOrdering")};
++                 kind = EnumKind; substs = [];
++               }};
++               val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++                 val_tree = Leaf {data = order; size = 4}}}];
++             }}};
++            {kind = Const {kind = Value {
++               ty = {kind = Bool};
++               val_tree = Leaf {data = volatile; size = 1};
++             }}};
++          ] when fn_ty.late_bound_generic_param_count = 0 ->
++            if Stdint.Uint128.to_string (DecoderAux.uint128_get volatile) <> "0" then
++              reject "only ordinary stores (VOLATILE=false) are modeled";
++            let suffix =
++              match Stdint.Uint128.to_string (DecoderAux.uint128_get order) with
++              | "0" -> "relaxed"
++              | "1" -> "release"
++              | "4" -> "seqcst"
++              | _ -> reject "unsupported ordering for an ordinary store"
++            in
++            Some ("std::intrinsics::atomic_store_" ^ suffix, [operand])
++        | _ -> reject "expected u8, a concrete AtomicOrdering, and VOLATILE=false")
++    | _ -> None
++
+   and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
+       =
+     let id_cpn = fn_def_ty_cpn.id in
+@@ -2386,17 +2423,17 @@
+       | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
+           translate_regular_fn_call [] fn_name
+       | `TrTypedConstantFn fn_def_ty_cpn -> (
+-          let fn_name = fn_def_ty_cpn.id.name in
+-          let substs_cpn = fn_def_ty_cpn.substs in
+-          let fn_name = translate_fn_name fn_name substs_cpn in
+-          let substs_cpn =
+-            substs_cpn
+-            @ List.init fn_def_ty_cpn.late_bound_generic_param_count
+-                (fun i : D.generic_arg ->
+-                  { kind = Lifetime { id = "'erased" } })
+-          in
+           let fn_name, substs_cpn =
+-            Args.body_tr_defs_ctx.fn_specializer fn_name substs_cpn
++            match specialize_u8_atomic_store fn_def_ty_cpn call_loc with
++            | Some specialization -> specialization
++            | None ->
++                let substs = fn_def_ty_cpn.substs in
++                let fn_name = translate_fn_name fn_def_ty_cpn.id.name substs in
++                let substs =
++                  substs @ List.init fn_def_ty_cpn.late_bound_generic_param_count
++                    (fun _ : D.generic_arg -> {kind = Lifetime {id = "'erased"}})
++                in
++                Args.body_tr_defs_ctx.fn_specializer fn_name substs
+           in
+           let* substs =
+             ListAux.try_map

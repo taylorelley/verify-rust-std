@@ -38,3 +38,15 @@ fn initialized_storage_allows_concurrent_atomic_and_ordinary_reads() {
         });
     }
 }
+
+#[test]
+fn invalid_store_orderings_panic_before_changing_storage() {
+    for initial in [false, true] {
+        let atomic = AtomicBool::new(initial);
+        for order in [Ordering::Acquire, Ordering::AcqRel] {
+            let result = std::panic::catch_unwind(|| atomic.store(!initial, order));
+            assert!(result.is_err());
+            assert_eq!(atomic.load(Ordering::Relaxed), initial);
+        }
+    }
+}
