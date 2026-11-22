@@ -1,0 +1,1 @@
+Replay of model-checking/verify-rust-std PR #675 at b457186be53f6eb23e6c7f6119a011da5a39e3f5 using its original proof inputs and workflow. This branch records historical evidence. See the current-source branch for new proof work.
