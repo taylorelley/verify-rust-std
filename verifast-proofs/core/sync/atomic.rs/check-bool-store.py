@@ -48,8 +48,8 @@ EXPECTED_STORES = ("atomic i8 %_6, ptr %a monotonic, align 1",
             "atomic i8 %_6, ptr %a seq_cst, align 1")
 
 
-def normalize_dispatch(ir, operation):
-    match = re.search(rf"^define [^\n]*@sc_verify_bool_{operation}\([^\n]*\{{\n.*?^\}}", ir, re.S | re.M)
+def normalize_dispatch(ir, operation, atomic_type="bool"):
+    match = re.search(rf"^define [^\n]*@sc_verify_{atomic_type}_{operation}\([^\n]*\{{\n.*?^\}}", ir, re.S | re.M)
     if not match:
         raise SystemExit("The compiler did not emit the inline atomic dispatch")
     # Normalize names and metadata. Retain the instruction operands, edges,

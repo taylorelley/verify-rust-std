@@ -19,12 +19,22 @@
     "verifast-proofs/core/sync/atomic.rs/check-bool-store.py",
     "verifast-proofs/core/sync/atomic.rs/bool-store.rs.in",
     "verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch",
-    "verifast-proofs/core/sync/atomic.rs/scope-api-probe.rs"
+    "verifast-proofs/core/sync/atomic.rs/scope-api-probe.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-u16.py",
+    "verifast-proofs/core/sync/atomic.rs/u16-proof.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
       "source": "Challenge 7 Parts 1 to 3",
       "behavior": "The Boolean conversion and ordinary store preserve lifetime and memory safety under the documented access rules",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "U16-SAFETY": {
+      "source": "Challenge 7 Parts 1 to 3",
+      "behavior": "Ordinary AtomicU16 constructor, load and store preserve aligned live storage and enforce access permissions.",
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
@@ -114,6 +124,24 @@
       "requirement": "BOOL-SAFETY",
       "method": "proof",
       "criterion": "Check the actual scoped-thread API including transfer of reader permissions and return at join",
+      "independent": true
+    },
+    "U16-CONSTRUCTOR-AND-ACCESS": {
+      "requirement": "U16-SAFETY",
+      "method": "proof",
+      "criterion": "Verify fresh and existing AtomicU16 shares and all ordinary load and store ordering branches",
+      "independent": true
+    },
+    "U16-MIXED-WIDTH": {
+      "requirement": "U16-SAFETY",
+      "method": "proof",
+      "criterion": "Admit the disjoint atomic byte writer and reject both overlapping byte writers on missing permission",
+      "independent": true
+    },
+    "U16-SOURCE": {
+      "requirement": "U16-SAFETY",
+      "method": "test",
+      "criterion": "Match compiled AtomicU16 constructor/load/store and reject altered pointer, ordering and layout",
       "independent": true
     }
   },

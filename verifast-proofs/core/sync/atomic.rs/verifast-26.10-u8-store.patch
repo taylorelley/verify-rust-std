@@ -5,9 +5,9 @@
      | _ -> name
  
 +  (* Select the existing primitive contract for the compiler's concrete
-+     ordinary u8 accesses. Other widths and volatile accesses need their own
++     ordinary u8 and u16 accesses. Other widths and volatile accesses need their own
 +     review and are deliberately rejected by this narrow proof frontend. *)
-+  and specialize_u8_atomic_access (fn_ty : D.ty_kind_fn_def_ty) loc =
++  and specialize_atomic_access (fn_ty : D.ty_kind_fn_def_ty) loc =
 +    match fn_ty.id.name with
 +    | ("core::intrinsics::atomic_store" | "std::intrinsics::atomic_store" |
 +       "core::intrinsics::atomic_load" | "std::intrinsics::atomic_load") as name ->
@@ -16,7 +16,7 @@
 +        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
 +        (match fn_ty.substs with
 +        | [
-+            ({kind = Type {kind = UInt U8}} as operand);
++            ({kind = Type {kind = UInt (U8 | U16)}} as operand);
 +            {kind = Const {kind = Value {
 +               ty = {kind = Adt {
 +                 id = {name = ("core::intrinsics::AtomicOrdering" |
@@ -42,7 +42,7 @@
 +              | _ -> reject "unsupported ordering for an ordinary access"
 +            in
 +            Some ("std::intrinsics::" ^ operation ^ "_" ^ suffix, [operand])
-+        | _ -> reject "expected u8, a concrete AtomicOrdering, and VOLATILE=false")
++        | _ -> reject "expected u8 or u16, a concrete AtomicOrdering, and VOLATILE=false")
 +    | _ -> None
 +
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
@@ -63,7 +63,7 @@
 -          in
            let fn_name, substs_cpn =
 -            Args.body_tr_defs_ctx.fn_specializer fn_name substs_cpn
-+            match specialize_u8_atomic_access fn_def_ty_cpn call_loc with
++            match specialize_atomic_access fn_def_ty_cpn call_loc with
 +            | Some specialization -> specialization
 +            | None ->
 +                let substs = fn_def_ty_cpn.substs in
@@ -76,9 +76,35 @@
            in
            let* substs =
              ListAux.try_map
+@@ -6278,7 +6319,14 @@
+                       (*instance_pred_decl list*) [],
+                       (*is polymorphic*) false ),
+                   (*struct_attr list*)
+-                  if is_repr_c_get adt_def_cpn then [ ReprC ] else [] )
++                  let repr = if is_repr_c_get adt_def_cpn then [ Ast.ReprC ] else [] in
++                  let alignment = known_alignment_get adt_def_cpn in
++                  if alignment = Stdint.Uint64.zero then repr
++                  else begin
++                    if vf_tparams <> [] || alignment > Stdint.Uint64.of_int (1 lsl 29) then
++                      Ast.static_error def_loc "Invalid compiler-exported concrete ABI alignment" None;
++                    Ast.RustcAbiAlignment (Stdint.Uint64.to_int alignment) :: repr
++                  end )
+             in
+             let struct_typedef_aux =
+               Ast.TypedefDecl
 --- a/bin/rust/std/lib.rsspec
 +++ b/bin/rust/std/lib.rsspec
-@@ -358,6 +358,23 @@
+@@ -327,6 +327,9 @@
+         req true;
+         ens atomic_align_of::<u8>() == 1;
+     
++    lem_auto atomic_align_of_u16();
++        req true;
++        ens atomic_align_of::<u16>() == 2;
+     lem_auto atomic_align_of_usize();
+         req true;
+         ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
+@@ -358,6 +361,23 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      
@@ -102,3 +128,66 @@
  }
  
  mod mem {
+--- a/src/rust_frontend/vf_mir/vf_mir.capnp
++++ b/src/rust_frontend/vf_mir/vf_mir.capnp
+@@ -279,6 +279,7 @@
+     clauses @7: List(Clause);
+     implementsDrop @8: Bool;
+     isReprC @11: Bool;
++    knownAlignment @12: UInt64; # Zero if unavailable or generic.
+ }
+ 
+ enum AliasTyKind {
+--- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+@@ -1098,6 +1098,13 @@
+             });
+             adt_def_cpn.set_implements_drop(adt_def.has_dtor(tcx));
+             adt_def_cpn.set_is_repr_c(adt_def.repr().c());
++            if is_local && adt_def.is_struct() && tcx.generics_of(adt_def.did()).count() == 0 {
++                let adt_ty = tcx.type_of(adt_def.did()).instantiate_identity().skip_normalization();
++                let env = ty::TypingEnv::fully_monomorphized();
++                if let Ok(layout) = tcx.layout_of(env.as_query_input(adt_ty)) {
++                    adt_def_cpn.set_known_alignment(layout.align.abi.bytes());
++                }
++            }
+         }
+ 
+         fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
+--- a/src/frontend/ast.ml
++++ b/src/frontend/ast.ml
+@@ -1119,7 +1119,7 @@
+ and
+   struct_attr =
+   | Packed
+-  | ReprC
++  | ReprC | RustcAbiAlignment of int
+ and constant_value = (* ?constant_value *)
+   IntConst of big_int
+ | BoolConst of bool
+--- a/src/frontend/ocaml_expr_of_ast.ml
++++ b/src/frontend/ocaml_expr_of_ast.ml
+@@ -1170,6 +1170,7 @@
+ and of_struct_attr = function
+   Packed -> c "Packed"
+ | ReprC -> c "ReprC"
++| RustcAbiAlignment n -> C ("RustcAbiAlignment", [I n])
+ and of_constant_value = function
+   IntConst n -> C ("IntConst", [BigInt n])
+ | BoolConst b -> C ("BoolConst", [B b])
+--- a/src/verifast1.ml
++++ b/src/verifast1.ml
+@@ -6514,6 +6514,13 @@
+         ctxt#assume_forall name [trigger] (List.map (fun x -> ctxt#type_inductive) tparams) fact
+       end
+     in
++    List.iter (function
++      | RustcAbiAlignment n ->
++        if dialect <> Some Rust || tparams <> [] || n <= 0 || n land (n - 1) <> 0 then
++          static_error l "Invalid compiler-exported concrete ABI alignment" None;
++        let type_info = ctxt#mk_app type_info_func [] in
++        ctxt#assert_term (ctxt#mk_eq (mk_alignof type_info) (ctxt#mk_intlit n))
++      | _ -> ()) attrs;
+     let packed = List.mem Packed attrs in
+     let repr_c = dialect <> Some Rust || List.mem ReprC attrs in
+     assume_axiom (fun _ _ s -> (sn ^ "_size_limits", s, ctxt#mk_and (ctxt#mk_lt (ctxt#mk_intlit 0) s) (ctxt#mk_le s max_uintptr_term)));

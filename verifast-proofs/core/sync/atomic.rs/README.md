@@ -129,3 +129,42 @@ thread specifications provide no contracts for `scope`, `spawn`, or `join`.
 The proof uses the compiler's atomic operations through the intrinsic
 contracts. Independent review of those contracts and the source
 specialization remains open.
+
+## First integer specialization
+
+After building the patched verifier above, replay the integer proof:
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-u16.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-u16
+```
+
+The Linux x86-64 proof checks `AtomicU16::from_ptr` for fresh and existing
+shares, and ordinary `load` and `store` for all orderings, including their
+panic paths. The patch exports ABI alignment from the compiler for
+concrete local structs. The proof uses that layout fact to establish
+two-byte alignment for the atomic word. An alignment-four mutation fails
+the expected layout assertion. The patch also accepts concrete ordinary
+`u16` intrinsics and uses the existing atomic permission predicate.
+
+The disjoint positive fixture starts with a word atomic permission and
+independent byte ownership. The overlap controls instead derive the byte
+pointer at each offset within the live word and fail to acquire byte
+ownership. The second control supplies a pointer-bounds fact so the
+failure targets permissions. These fixtures check the resource model
+assuming the primitive contracts. They do not run invalid Rust code.
+
+The source check compares the constructor and public load/store wrappers
+compiled by the fork's pinned nightly. It checks size, alignment, field
+offset, all emitted atomic orderings and the panic paths. It detects
+mutations to the constructor pointer and a load ordering. This evidence
+is specific to the pinned specialization and target.
+
+The Boolean proof review should check the lifetime-token transfers,
+fractional read permissions, exact intrinsic dispatch, and the compiler
+layout and code-generation assumptions. Neither the proof nor its source
+comparison establishes the correctness of Rust's scoped-thread
+implementation. Independent review of both specializations is pending.

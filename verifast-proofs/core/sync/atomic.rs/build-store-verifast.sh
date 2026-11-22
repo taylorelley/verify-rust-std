@@ -50,7 +50,13 @@ CONFIG
 cargo +nightly-2026-09-25 install --locked --git https://github.com/btj/capnpc-ocaml-decoder \
     --rev 2d6606d9b59cd0c88a66729f3f076c10c0c8e0b2 --root "$work/decoder"
 git -C source apply "$proof_dir/verifast-26.10-u8-store.patch"
+rust_sysroot=$(rustc +nightly-2026-09-25 --print sysroot)
+LIBRARY_PATH="$LIBRARY_PATH:$rust_sysroot/lib" \
+    cargo +nightly-2026-09-25 build --release --locked \
+    --manifest-path source/src/rust_frontend/vf_mir_exporter/Cargo.toml
 (cd source/src && dune build vfconsole/vfconsole.exe)
+rm -- "$runtime/vf-rust-mir-exporter"
+cp source/src/rust_frontend/vf_mir_exporter/target/release/vf_mir_exporter "$runtime/vf-rust-mir-exporter"
 rm -- "$runtime/verifast"
 cp source/src/_build/default/vfconsole/vfconsole.exe "$runtime/verifast"
 rm -- "$runtime/rust/std/lib.rsspec"
