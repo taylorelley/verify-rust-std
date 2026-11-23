@@ -199,9 +199,26 @@ parallel runtime client suite for Booleans remains separate. The pointer
 client exercises null, dangling, address-only and live pointer values
 without dereferencing them.
 
-The proof covers the constructor on Linux x86-64. Its atomic alignment
-premise for thin pointers and source comparison still require independent
-review. Ordinary pointer loads and stores have no formal proof here.
+The proof also covers ordinary pointer loads and stores on Linux x86-64
+for the same five pointee sizes. The load borrows a read fraction and the
+store requires full permission in the trusted primitive contracts. The patched
+verifier accepts compiler-confirmed concrete thin raw pointers and rejects
+wide pointers and volatile accesses.
+
+The source comparison checks pointer-typed LLVM loads and stores, the three
+legal orderings for each operation, and both invalid-order panic branches.
+The controls reject changed load and store orderings, an illegal intrinsic ordering,
+a volatile load, and a store attempted with only a read fraction. The pointer
+client also dereferences a live pointer after all nine legal store and load
+ordering pairs. To replay the client under Miri, place `ptr-client.rs` in
+`src/lib.rs` in a dependency-free Cargo package with edition 2024. Run
+`cargo +nightly-2026-11-19 miri test --offline` with
+`MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-seed=0"`.
+
+The formal claims are limited to storage permissions and the modeled
+lifetime and alignment rules. Pointer provenance and concurrent memory-model
+behavior are outside these claims. The trusted alignment and intrinsic
+contracts and the source comparison still require independent review.
 
 ## Complete constructor replay
 

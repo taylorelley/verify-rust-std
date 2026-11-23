@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "intended_use": "Verify the ordinary Boolean atomic API on the current challenge source",
+  "intended_use": "Verify the covered atomic operations on the current Challenge 7 source",
   "approval_basis": "Verify Rust Std Lib Challenge 7",
   "target": "Current verify-rust-std atomic implementation, Linux x86-64 initial diagnostic target",
   "files": [
@@ -26,7 +26,9 @@
     "verifast-proofs/core/sync/atomic.rs/slot-constructor.rs.in",
     "verifast-proofs/core/sync/atomic.rs/ptr-client.rs",
     "verifast-proofs/core/sync/atomic.rs/check-from-ptr.py",
-    "doc/src/challenges/0007-atomic-types.md"
+    "doc/src/challenges/0007-atomic-types.md",
+    "verifast-proofs/core/sync/atomic.rs/ptr-access.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/ptr-wide-probe.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -46,10 +48,11 @@
       ]
     },
     "PTR-SAFETY": {
-      "source": "Challenge 7 Part 1",
-      "behavior": "AtomicPtr::from_ptr converts a live aligned initialized pointer slot without requiring a valid pointee.",
+      "source": "Challenge 7 Parts 1 to 3",
+      "behavior": "AtomicPtr converts a live aligned initialized pointer slot and performs ordinary pointer accesses with the required storage permissions.",
       "implementation": [
-        "library/core/src/sync/atomic.rs"
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
       ]
     },
     "CONSTRUCTOR-COVERAGE": {
@@ -178,7 +181,7 @@
     "PTR-CLIENT": {
       "requirement": "PTR-SAFETY",
       "method": "test",
-      "criterion": "Exercise arbitrary-address representatives without dereferencing the stored pointer",
+      "criterion": "Exercise null, dangling, address-only and live pointer values, and dereference a live pointer after each valid store and load ordering pair under Miri",
       "independent": true
     },
     "INTEGER-CONSTRUCTOR-MATRIX": {
@@ -191,6 +194,18 @@
       "requirement": "CONSTRUCTOR-COVERAGE",
       "method": "test",
       "criterion": "Compare compiled constructor bodies, detect changed slot addresses, and confirm all required constructors ran on eligible targets",
+      "independent": true
+    },
+    "PTR-ORDINARY-ACCESS": {
+      "requirement": "PTR-SAFETY",
+      "method": "proof",
+      "criterion": "Prove ordinary thin pointer loads and stores for the five covered pointee sizes and reject a fractional write, an illegal ordering, volatility and a wide pointer",
+      "independent": true
+    },
+    "PTR-ACCESS-SOURCE": {
+      "requirement": "PTR-SAFETY",
+      "method": "test",
+      "criterion": "Match compiled pointer-typed load and store branches and detect changed load and store orderings",
       "independent": true
     }
   },

@@ -30,3 +30,20 @@ fn pointer_value_does_not_constrain_slot_conversion() {
     check_slot(&mut [0_u8; 3]);
     check_slot(&mut 0_u32);
 }
+
+#[test]
+fn live_pointer_survives_every_ordinary_ordering_pair() {
+    let mut value = 42_u32;
+    let pointer = &raw mut value;
+    let slot = AtomicPtr::new(null_mut());
+
+    for store_order in [Ordering::Relaxed, Ordering::Release, Ordering::SeqCst] {
+        slot.store(pointer, store_order);
+        for load_order in [Ordering::Relaxed, Ordering::Acquire, Ordering::SeqCst] {
+            let loaded = slot.load(load_order);
+            assert_eq!(loaded, pointer);
+            // The allocation is still live and has no competing accesses.
+            assert_eq!(unsafe { *loaded }, 42);
+        }
+    }
+}

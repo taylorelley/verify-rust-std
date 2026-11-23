@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the AtomicPtr constructor for the five required pointee sizes."""
+"""Verify AtomicPtr construction and ordinary accesses for five pointee sizes."""
 
 import argparse
 import hashlib
@@ -28,6 +28,17 @@ BRIDGE = """
 pub unsafe fn sc_verify_ptr_ctor<'a>(p: *mut *mut Pointee) -> &'a AtomicPtr$TYPE {
     unsafe { AtomicPtr::from_ptr(p) }
 }
+
+#[unsafe(no_mangle)]
+pub fn sc_verify_ptr_load(a: &AtomicPtr$TYPE, order: Ordering) -> (*mut Pointee, u8) {
+    (a.load(order), 1)
+}
+
+#[unsafe(no_mangle)]
+pub fn sc_verify_ptr_store(a: &AtomicPtr$TYPE, value: *mut Pointee, order: Ordering) -> *mut Pointee {
+    a.store(value, order);
+    value
+}
 """
 
 
@@ -45,13 +56,23 @@ def main():
     atomic = (src / "atomic.rs").read_bytes()
     if hashlib.sha256(atomic).hexdigest() != constructor["SOURCE_SHA256"]:
         raise SystemExit("Atomic source changed. Review the pointer specialization.")
+    declaration = runpy.run_path(str(here / "check-bool-clients.py"))["store_declaration"]
+    intrinsics = declaration((src.parent / "intrinsics/mod.rs").read_text())
+    if hashlib.sha256(intrinsics.encode()).hexdigest() != "6bb2f571c911c962ecd2ebe85bf74df718dfab191f22a8f70ee9dad71cca0fc5":
+        raise SystemExit("Atomic intrinsic declarations changed. Review pointer access.")
     template = Template((here / "slot-constructor.rs.in").read_text())
 
+    header, sections = (here / "ptr-access.rs.in").read_text().split("// METHODS\n")
+    methods, intrinsic_helpers = sections.split("// HELPERS\n")
+
     def render(size):
-        return template.substitute(POINTEE=f"pub struct Pointee([u8; {size}]);",
+        constructor = template.substitute(POINTEE=f"pub struct Pointee([u8; {size}]);",
                                    OPERAND="*mut Pointee", FIELD="*mut super::Pointee",
                                    ATOMIC="AtomicPtr", WIDTH=8,
                                    ALIGN_LEMMA="atomic_align_of_ptr::<Pointee>()")
+        combined = replace(constructor, "impl AtomicPtr {\n", "impl AtomicPtr {\n" + methods)
+        return header + combined + "\n" + intrinsic_helpers
+
     logs = args.logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)
     coverage = logs / "coverage.json"
@@ -76,7 +97,7 @@ def main():
         upstream.write_text(crate)
         proof = work / "ptr.rs"
 
-        def compile_constructor(source, label):
+        def compile_dispatch(source, label):
             output = logs / (label + ".ll")
             status, diagnostics = checks["run"](
                 [rustc, *flags, "--emit=llvm-ir", "-C", "opt-level=2", source, "-o", output],
@@ -84,7 +105,9 @@ def main():
             )
             if status:
                 raise SystemExit(diagnostics)
-            return checks["normalize_dispatch"](output.read_text(), "ctor", "ptr")
+            text = output.read_text()
+            return {op: checks["normalize_dispatch"](text, op, "ptr")
+                    for op in ("ctor", "load", "store")}
 
         def verify(source, label, diagnostic=None):
             proof.write_text(source)
@@ -96,6 +119,8 @@ def main():
                 "0 errors found", "target: x86_64-unknown-linux-gnu",
                 *(f"Verifying function '{name}'" for name in (
                     "AtomicPtr::from_ptr", "share_twice", "recover_slot",
+                    "AtomicPtr::as_ptr", "AtomicPtr::load", "AtomicPtr::store",
+                    "atomic_load", "atomic_store", "read_pointer_fraction",
                 )),
             )):
                 raise SystemExit(f"Pointer proof or coverage failed. See {label}.log")
@@ -113,16 +138,25 @@ def main():
             )
             suffix = (layout + BRIDGE).replace("$TYPE", "")
             proof.write_text(generated + suffix)
-            original = compile_constructor(upstream, f"original-{size}")
-            if compile_constructor(proof, f"specialized-{size}") != original:
-                raise SystemExit(f"Compiled constructor differs at pointee size {size}")
+            original = compile_dispatch(upstream, f"original-{size}")
+            if compile_dispatch(proof, f"specialized-{size}") != original:
+                raise SystemExit(f"Compiled pointer operations differ at pointee size {size}")
+            for op, orders in (("load", ("monotonic", "acquire", "seq_cst")),
+                               ("store", ("monotonic", "release", "seq_cst"))):
+                operand = "ptr," if op == "load" else "ptr %value,"
+                expected_orders = sorted(orders)
+                actual_orders = sorted(re.findall(
+                    rf"{op} atomic {operand} ptr %a (\w+), align 8", original[op]
+                ))
+                if actual_orders != expected_orders or original[op].count("tail call void") != 2:
+                    raise SystemExit(f"Missing pointer-typed {op} ordering or panic branch for size {size}")
             verify(generated, f"proof-{size}")
             verified_sizes.append(size)
 
         # The last case supplies the baseline for the mutation controls.
         generated = render(SIZES[-1])
         proof.write_text(replace(generated, "&*ptr.cast()", "&*ptr.wrapping_add(1).cast()") + suffix)
-        if compile_constructor(proof, "changed-slot") == original:
+        if compile_dispatch(proof, "changed-slot")["ctor"] == original["ctor"]:
             raise SystemExit("Source comparison accepted a changed slot address")
 
         verify(replace(generated, " &*& *ptr |-> ?value &*& ptr as usize", " &*& ptr as usize"),
@@ -137,9 +171,30 @@ def main():
         verify(replace(generated, "#[repr(C, align(8))]", "#[repr(C, align(16))]"),
                "wrong-alignment", "Cannot prove alignof(private::AlignedSlot_type_info) = 8")
 
+        load = "intrinsics::atomic_load::<*mut Pointee, { AO::Acquire }, false>(src)"
+        wrong_order = replace(generated, load, load.replace("Acquire", "Relaxed"))
+        proof.write_text(wrong_order + suffix)
+        if compile_dispatch(proof, "changed-load-order")["load"] == original["load"]:
+            raise SystemExit("Source comparison accepted a changed pointer load ordering")
+        store = "intrinsics::atomic_store::<*mut Pointee, { AO::Release }, false>(dst, val)"
+        wrong_order = replace(generated, store, store.replace("Release", "Relaxed"))
+        proof.write_text(wrong_order + suffix)
+        if compile_dispatch(proof, "changed-store-order")["store"] == original["store"]:
+            raise SystemExit("Source comparison accepted a changed pointer store ordering")
+        verify(replace(generated, load, load.replace("Acquire", "Release")),
+               "illegal-load-order", "unsupported ordering for an ordinary access")
+        verify(replace(generated, load, load.replace("false", "true")),
+               "volatile-load", "only ordinary accesses (VOLATILE=false) are modeled")
+        read = "intrinsics::atomic_load::<*mut Pointee, { AO::Relaxed }, false>(src as *const *mut Pointee)"
+        write = "intrinsics::atomic_store::<*mut Pointee, { AO::Relaxed }, false>(src, std::ptr::null_mut()); std::ptr::null_mut()"
+        verify(replace(generated, read, write), "store-with-read-fraction",
+               "No matching heap chunks: [_]std::intrinsics::atomic_points_to")
+        verify((here / "ptr-wide-probe.rs").read_text(), "wide-pointer",
+               "expected u8, u16 or a concrete thin pointer")
+
     coverage.write_text(json.dumps({"target": "x86_64-unknown-linux-gnu", "pointee_sizes": verified_sizes}) + "\n")
     print("AtomicPtr::from_ptr verified for pointee sizes 0, 1, 2, 3, and 4.")
-    print("Compiled constructors matched. Slot, lifetime, alignment and source controls passed.")
+    print("Pointer loads and stores verified. Compiled dispatch, permissions and rejection controls passed.")
 
 
 if __name__ == "__main__":

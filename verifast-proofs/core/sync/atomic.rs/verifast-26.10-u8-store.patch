@@ -5,7 +5,7 @@
      | _ -> name
  
 +  (* Select the existing primitive contract for the compiler's concrete
-+     ordinary u8 and u16 accesses. Other widths and volatile accesses need their own
++     ordinary u8, u16 and thin-pointer accesses. Other widths and volatile accesses need their own
 +     review and are deliberately rejected by this narrow proof frontend. *)
 +  and specialize_atomic_access (fn_ty : D.ty_kind_fn_def_ty) loc =
 +    match fn_ty.id.name with
@@ -16,7 +16,7 @@
 +        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
 +        (match fn_ty.substs with
 +        | [
-+            ({kind = Type {kind = UInt (U8 | U16)}} as operand);
++            ({kind = Type {kind = (UInt (U8 | U16) | RawPtr {is_thin = true; _})}} as operand);
 +            {kind = Const {kind = Value {
 +               ty = {kind = Adt {
 +                 id = {name = ("core::intrinsics::AtomicOrdering" |
@@ -42,7 +42,7 @@
 +              | _ -> reject "unsupported ordering for an ordinary access"
 +            in
 +            Some ("std::intrinsics::" ^ operation ^ "_" ^ suffix, [operand])
-+        | _ -> reject "expected u8 or u16, a concrete AtomicOrdering, and VOLATILE=false")
++        | _ -> reject "expected u8, u16 or a concrete thin pointer, a concrete AtomicOrdering, and VOLATILE=false")
 +    | _ -> None
 +
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
@@ -92,6 +92,17 @@
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
+@@ -7636,8 +7684,8 @@
+     | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
+     | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
+         if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
+-    | ( RawPtr { ty = ty1; mutability = mut1 },
+-        RawPtr { ty = ty2; mutability = mut2 } ) ->
++    | ( RawPtr { ty = ty1; mutability = mut1; _ },
++        RawPtr { ty = ty2; mutability = mut2; _ } ) ->
+         if mut1 = mut2 then match_types env ty1 ty2 else None
+     | _ -> None
+ 
 --- a/bin/rust/std/lib.rsspec
 +++ b/bin/rust/std/lib.rsspec
 @@ -327,6 +327,50 @@
@@ -179,6 +190,14 @@
  }
  
  enum AliasTyKind {
+@@ -312,6 +313,7 @@
+     struct RawPtrTy {
+         ty @0: Ty;
+         mutability @1: Mutability;
++        isThin @2: Bool; # Concrete pointer has a single scalar layout.
+     }
+ 
+     struct RefTy {
 --- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
 +++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
 @@ -1098,6 +1098,13 @@
@@ -195,6 +214,29 @@
          }
  
          fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
+@@ -1826,9 +1833,19 @@
+                     Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
+                 }
+                 ty::TyKind::Foreign(_) => ty_kind_cpn.set_foreign(()),
+-                ty::TyKind::RawPtr(ty, mutability) => {
+-                    let raw_ptr_ty_cpn = ty_kind_cpn.init_raw_ptr();
+-                    Self::encode_ty_raw_ptr(tcx, enc_ctx, *ty, *mutability, raw_ptr_ty_cpn);
++                ty::TyKind::RawPtr(pointee, mutability) => {
++                    use rustc_middle::ty::TypeVisitableExt;
++                    let mut raw_ptr_ty_cpn = ty_kind_cpn.init_raw_ptr();
++                    if !ty.has_param() && !ty.has_aliases() && !ty.has_escaping_bound_vars() {
++                        let env = ty::TypingEnv::fully_monomorphized();
++                        if let Ok(layout) = tcx.layout_of(env.as_query_input(ty)) {
++                            raw_ptr_ty_cpn.set_is_thin(
++                                matches!(layout.backend_repr, rustc_abi::BackendRepr::Scalar(_))
++                                    && layout.size == tcx.data_layout.pointer_size(),
++                            );
++                        }
++                    }
++                    Self::encode_ty_raw_ptr(tcx, enc_ctx, *pointee, *mutability, raw_ptr_ty_cpn);
+                 }
+                 ty::TyKind::Ref(region, ty, mutability) => {
+                     let ref_ty_cpn = ty_kind_cpn.init_ref();
 --- a/src/frontend/ast.ml
 +++ b/src/frontend/ast.ml
 @@ -1119,7 +1119,7 @@
