@@ -1,0 +1,184 @@
+// Permission proof adapted from model-checking/verify-rust-std PR #675.
+use std::cell::UnsafeCell;
+
+// Each replay substitutes one of the five required pointee sizes.
+pub struct Pointee([u8; $SIZE]);
+mod private {
+    #[repr(C, align(8))]
+    pub struct Align8(*mut super::Pointee);
+    /*@
+    pred <Align8>.own(t, v) = true;
+    lem Align8_drop()
+        req Align8_own(?t, ?v);
+        ens true;
+    {
+        open Align8_own(t, v);
+    }
+    lem Align8_send(t1: thread_id_t)
+        req Align8_own(?t, ?v);
+        ens Align8_own(t1, v);
+    {
+        open Align8_own(t, v);
+        close Align8_own(t1, v);
+    }
+    @*/
+}
+#[repr(C)]
+pub struct AtomicPtr {
+    v: UnsafeCell<private::Align8>,
+}
+unsafe impl Send for AtomicPtr {}
+unsafe impl Sync for AtomicPtr {}
+impl AtomicPtr {
+    pub const unsafe fn from_ptr<'a>(ptr: *mut *mut Pointee) -> &'a AtomicPtr
+    //@ req type_interp::<AtomicPtr>() &*& atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*& exists::<bool>(?fresh) &*& (if fresh { *ptr |-> ?value } else { [_](<AtomicPtr>.share)('a, currentThread, ptr as *AtomicPtr) }) &*& ptr as usize % std::mem::align_of::<AtomicPtr>() == 0;
+    //@ ens type_interp::<AtomicPtr>() &*& atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*& [_](<AtomicPtr>.share)('a, currentThread, result) &*& [_](<AtomicPtr>.share)('a, currentThread, ptr as *AtomicPtr) &*& [_]frac_borrow('a, ref_initialized_(result)) &*& ref_origin(result) == ref_origin(ptr as *AtomicPtr) &*& (if fresh { borrow_end_token('a, (<AtomicPtr>.full_borrow_content)(currentThread, ptr as *AtomicPtr)) } else { true });
+    //@ on_unwind_ens false;
+    {
+        //@ open exists::<bool>(fresh);
+        /*@ if fresh {
+            close_points_to(ptr as *private::Align8);
+            close_points_to(ptr as *AtomicPtr);
+            assert *(ptr as *AtomicPtr) |-> ?atomic;
+            close private::Align8_own(currentThread, atomic.v);
+            close <AtomicPtr>.own(currentThread, atomic);
+            close_full_borrow_content::<AtomicPtr>(currentThread, ptr as *AtomicPtr);
+            borrow('a, (<AtomicPtr>.full_borrow_content)(currentThread, ptr as *AtomicPtr));
+            share_full_borrow::<AtomicPtr>('a, currentThread, ptr as *AtomicPtr);
+        } @*/
+        //@ let p = precreate_ref(ptr as *AtomicPtr);
+        //@ init_ref_share::<AtomicPtr>('a, currentThread, p);
+        //@ open_frac_borrow('a, ref_initialized_(p), q);
+        //@ open [?f]ref_initialized_::<AtomicPtr>(p)();
+        let result = unsafe { &*ptr.cast() };
+        //@ close [f]ref_initialized_::<AtomicPtr>(p)();
+        //@ close_frac_borrow(f, ref_initialized_(p));
+        result
+    }
+}
+/*@
+fix accepts_ptr(value: *Pointee) -> bool { true }
+pred_ctor own_atomic_contents(p: **Pointee)(;) = std::intrinsics::atomic_points_to(p, 1, accepts_ptr);
+pred <AtomicPtr>.own(t, value) = <private::Align8>.own(t, value.v);
+lem AtomicPtr_drop()
+    req AtomicPtr_own(?t, ?a);
+    ens <private::Align8>.own(t, a.v);
+{
+    open AtomicPtr_own(t, a);
+}
+lem AtomicPtr_send(t1: thread_id_t)
+    req AtomicPtr_own(?t, ?a);
+    ens AtomicPtr_own(t1, a);
+{
+    open AtomicPtr_own(t, a);
+    private::Align8_send(t1);
+    close AtomicPtr_own(t1, a);
+}
+pred <AtomicPtr>.share(k, t, l) = [_]frac_borrow(k, own_atomic_contents(ref_origin(l) as **Pointee));
+
+lem AtomicPtr_share_mono(k: lifetime_t, k1: lifetime_t, t: thread_id_t, l: *AtomicPtr)
+    req lifetime_inclusion(k1, k) == true &*& [_]AtomicPtr_share(k, t, l);
+    ens [_]AtomicPtr_share(k1, t, l);
+{
+    open AtomicPtr_share(k, t, l);
+    frac_borrow_mono(k, k1, own_atomic_contents(ref_origin(l) as **Pointee));
+    close AtomicPtr_share(k1, t, l);
+    leak AtomicPtr_share(k1, t, l);
+}
+
+lem AtomicPtr_sync(t1: thread_id_t)
+    req is_Sync(typeid(AtomicPtr)) == true &*& [_]AtomicPtr_share(?k, ?t0, ?l);
+    ens [_]AtomicPtr_share(k, t1, l);
+{
+    open AtomicPtr_share(k, t0, l);
+    close AtomicPtr_share(k, t1, l);
+    leak AtomicPtr_share(k, t1, l);
+}
+
+lem AtomicPtr_share_full(k: lifetime_t, t: thread_id_t, l: *AtomicPtr)
+    req atomic_mask(MaskTop) &*& full_borrow(k, AtomicPtr_full_borrow_content(t, l)) &*& [?q]lifetime_token(k) &*& ref_origin(l) == l;
+    ens atomic_mask(MaskTop) &*& [_]AtomicPtr_share(k, t, l) &*& [q]lifetime_token(k);
+{
+    open_full_borrow_strong_m_(k, AtomicPtr_full_borrow_content(t, l));
+    open AtomicPtr_full_borrow_content(t, l)();
+    assert AtomicPtr_own(t, ?stored);
+    open AtomicPtr_own(t, stored);
+    open private::Align8_own(t, stored.v);
+    open_points_to(l as *private::Align8);
+    close_points_to(l as *private::Align8);
+    to_u8s_(l as *private::Align8);
+    from_u8s_(l as *private::Align8);
+    open_points_to(l as *private::Align8);
+    std::intrinsics::atomic_align_of_ptr::<Pointee>();
+    assert l as usize % std::mem::align_of::<private::Align8>() == 0;
+    assert std::mem::align_of::<private::Align8>() == 8;
+    std::intrinsics::close_atomic_points_to_m(l as **Pointee, accepts_ptr);
+    close own_atomic_contents(l as **Pointee)();
+    close True();
+    produce_lem_ptr_chunk restore_full_borrow_(True, own_atomic_contents(l as **Pointee), AtomicPtr_full_borrow_content(t, l))() {
+        open True();
+        open own_atomic_contents(l as **Pointee)();
+        std::intrinsics::open_atomic_points_to(l as **Pointee);
+        close_points_to(l as *private::Align8);
+        close_points_to(l);
+        assert *l |-> ?value;
+        close private::Align8_own(t, value.v);
+        close AtomicPtr_own(t, value);
+        open_points_to(l);
+        close AtomicPtr_full_borrow_content(t, l)();
+    } {
+        close_full_borrow_strong_m_();
+    }
+    full_borrow_into_frac_m(k, own_atomic_contents(l as **Pointee));
+    close AtomicPtr_share(k, t, l);
+    leak AtomicPtr_share(k, t, l);
+}
+
+lem init_ref_AtomicPtr(p: *AtomicPtr)
+    req atomic_mask(Nlft) &*& ref_init_perm(p, ?x) &*& [_]AtomicPtr_share(?k, ?t, x) &*& [?q]lifetime_token(k);
+    ens atomic_mask(Nlft) &*& [q]lifetime_token(k) &*& [_]AtomicPtr_share(k, t, p) &*& [_]frac_borrow(k, ref_initialized_(p));
+{
+    open AtomicPtr_share(k, t, x);
+    open_ref_init_perm_AtomicPtr(p);
+    close_ref_initialized_AtomicPtr(p, 1);
+    close ref_initialized_::<AtomicPtr>(p)();
+    borrow_m(k, ref_initialized_(p));
+    leak borrow_end_token(k, ref_initialized_(p));
+    full_borrow_into_frac_m(k, ref_initialized_(p));
+    close AtomicPtr_share(k, t, p);
+    leak AtomicPtr_share(k, t, p);
+}
+@*/
+// Included in the proof suite to check that the sharing contract is usable.
+unsafe fn share_twice<'a>(ptr: *mut *mut Pointee) -> (&'a AtomicPtr, &'a AtomicPtr)
+//@ req type_interp::<AtomicPtr>() &*& atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*& *ptr |-> ?value &*& ptr as usize % std::mem::align_of::<AtomicPtr>() == 0;
+//@ ens type_interp::<AtomicPtr>() &*& atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*& [_]AtomicPtr_share('a, currentThread, result.0) &*& [_]AtomicPtr_share('a, currentThread, result.1) &*& borrow_end_token('a, AtomicPtr_full_borrow_content(currentThread, ptr as *AtomicPtr));
+//@ on_unwind_ens false;
+{
+    //@ close exists::<bool>(true);
+    let first = unsafe { AtomicPtr::from_ptr/*@::<'a>@*/(ptr) };
+    //@ close exists::<bool>(false);
+    let second = unsafe { AtomicPtr::from_ptr/*@::<'a>@*/(ptr) };
+    (first, second)
+}
+
+// End the modeled scope before recovering ownership of the pointer slot.
+unsafe fn recover_slot(slot: *mut *mut Pointee)
+//@ req type_interp::<AtomicPtr>() &*& atomic_mask(MaskTop) &*& *slot |-> ?initial &*& slot as usize % std::mem::align_of::<AtomicPtr>() == 0;
+//@ ens type_interp::<AtomicPtr>() &*& atomic_mask(MaskTop) &*& *slot |-> _;
+//@ on_unwind_ens false;
+{
+    //@ let k = begin_lifetime_m();
+    {
+        //@ let_lft 'scope = k;
+        let _refs = unsafe { share_twice/*@::<'scope>@*/(slot) };
+    }
+    //@ end_lifetime_m(k);
+    //@ let cell = slot as *AtomicPtr;
+    //@ borrow_end_m(k, AtomicPtr_full_borrow_content(currentThread, cell));
+    //@ open AtomicPtr_full_borrow_content(currentThread, cell)();
+    //@ assert AtomicPtr_own(currentThread, ?stored);
+    //@ open AtomicPtr_own(currentThread, stored);
+    //@ open private::Align8_own(currentThread, stored.v);
+    //@ open_points_to(cell as *private::Align8);
+}

@@ -168,3 +168,37 @@ fractional read permissions, exact intrinsic dispatch, and the compiler
 layout and code-generation assumptions. Neither the proof nor its source
 comparison establishes the correctness of Rust's scoped-thread
 implementation. Independent review of both specializations is pending.
+
+## Pointer constructor
+
+Use the same rebuilt verifier and pinned source compiler.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-ptr.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-ptr
+"$rustc_path" --edition=2024 --test "$proof/ptr-client.rs" -o /tmp/challenge-7-ptr-client
+/tmp/challenge-7-ptr-client
+```
+
+The proof runs separately for pointee sizes 0, 1, 2, 3 and 4 bytes. Each
+fresh conversion requires an initialized pointer slot, the slot's atomic
+alignment and a live scope token. An existing conversion requires the
+corresponding atomic share. The specification leaves the pointer value
+inside the slot unrestricted. The scope fixture creates two references
+and recovers ownership of the slot after ending the modeled lifetime.
+
+The source check pins the fork's atomic module and compares the
+specialized and original constructors, including their eight-byte layout
+and field offset. Its mutation changes the returned slot address. Proof
+controls exercise missing storage or alignment, a second fresh claim,
+attempted recovery before scope end and a wrong storage layout. The
+parallel runtime client suite for Booleans remains separate. The pointer
+client exercises null, dangling, address-only and live pointer values
+without dereferencing them.
+
+The proof covers the constructor on Linux x86-64. Its atomic alignment
+premise for thin pointers and source comparison still require independent
+review. Ordinary pointer loads and stores have no formal proof here.

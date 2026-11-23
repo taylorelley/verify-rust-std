@@ -94,17 +94,22 @@
                Ast.TypedefDecl
 --- a/bin/rust/std/lib.rsspec
 +++ b/bin/rust/std/lib.rsspec
-@@ -327,6 +327,9 @@
+@@ -327,6 +327,14 @@
          req true;
          ens atomic_align_of::<u8>() == 1;
      
 +    lem_auto atomic_align_of_u16();
 +        req true;
 +        ens atomic_align_of::<u16>() == 2;
++    // Thin pointer storage on the target uses the pointer-sized atomic ABI.
++    lem atomic_align_of_ptr<T>();
++        req true;
++        ens atomic_align_of::<*T>() == std::mem::size_of::<usize>();
++
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +361,23 @@
+@@ -358,6 +366,23 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      

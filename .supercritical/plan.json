@@ -21,7 +21,10 @@
     "verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch",
     "verifast-proofs/core/sync/atomic.rs/scope-api-probe.rs",
     "verifast-proofs/core/sync/atomic.rs/check-u16.py",
-    "verifast-proofs/core/sync/atomic.rs/u16-proof.rs"
+    "verifast-proofs/core/sync/atomic.rs/u16-proof.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-ptr.py",
+    "verifast-proofs/core/sync/atomic.rs/ptr-proof.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/ptr-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -38,6 +41,13 @@
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "PTR-SAFETY": {
+      "source": "Challenge 7 Part 1",
+      "behavior": "AtomicPtr::from_ptr converts a live aligned initialized pointer slot without requiring a valid pointee.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs"
       ]
     }
   },
@@ -142,6 +152,24 @@
       "requirement": "U16-SAFETY",
       "method": "test",
       "criterion": "Match compiled AtomicU16 constructor/load/store and reject altered pointer, ordering and layout",
+      "independent": true
+    },
+    "PTR-CONSTRUCTOR": {
+      "requirement": "PTR-SAFETY",
+      "method": "proof",
+      "criterion": "Verify fresh and reused AtomicPtr shares for pointee sizes 0, 1, 2, 3 and 4 and recover the slot after the modeled lifetime",
+      "independent": true
+    },
+    "PTR-SOURCE": {
+      "requirement": "PTR-SAFETY",
+      "method": "test",
+      "criterion": "Compare all five compiled pointer constructors and reject an altered slot address",
+      "independent": true
+    },
+    "PTR-CLIENT": {
+      "requirement": "PTR-SAFETY",
+      "method": "test",
+      "criterion": "Exercise arbitrary-address representatives without dereferencing the stored pointer",
       "independent": true
     }
   },

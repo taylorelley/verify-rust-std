@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Verify the AtomicPtr constructor for the five required pointee sizes."""
+
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import re
+import runpy
+import shutil
+import subprocess
+import tempfile
+
+SIZES = (0, 1, 2, 3, 4)
+LAYOUT = """
+const _: () = {
+    assert!(size_of::<Pointee>() == $SIZE);
+    assert!(size_of::<*mut Pointee>() == 8);
+    assert!(size_of::<AtomicPtr$TYPE>() == 8);
+    assert!(align_of::<AtomicPtr$TYPE>() == 8);
+    assert!(std::mem::offset_of!(AtomicPtr$TYPE, v) == 0);
+};
+"""
+BRIDGE = """
+#[unsafe(no_mangle)]
+pub unsafe fn sc_verify_ptr_ctor<'a>(p: *mut *mut Pointee) -> &'a AtomicPtr$TYPE {
+    unsafe { AtomicPtr::from_ptr(p) }
+}
+"""
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("verifast_bin", type=Path)
+    parser.add_argument("rustc", type=Path)
+    parser.add_argument("logs", type=Path)
+    args = parser.parse_args()
+    here = Path(__file__).resolve().parent
+    constructor = runpy.run_path(str(here / "check-bool-constructor.py"))
+    checks = runpy.run_path(str(here / "check-bool-store.py"))
+    replace = constructor["replace_once"]
+    src = here.parents[3] / "library/core/src/sync"
+    atomic = (src / "atomic.rs").read_bytes()
+    if hashlib.sha256(atomic).hexdigest() != constructor["SOURCE_SHA256"]:
+        raise SystemExit("Atomic source changed. Review the pointer specialization.")
+    template = (here / "ptr-proof.rs.in").read_text()
+    logs = args.logs.resolve()
+    logs.mkdir(parents=True, exist_ok=True)
+    runtime = args.verifast_bin.resolve()
+    rustc = args.rustc.resolve()
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, (str(runtime), env.get("LD_LIBRARY_PATH"))))
+    flags = ["--edition=2024", "--crate-type=lib"]
+    if "host: x86_64-unknown-linux-gnu" not in subprocess.check_output([rustc, "-vV"], text=True):
+        raise SystemExit("The compiler must target the same Linux x86-64 ABI as the proof")
+    verifier = [runtime / "verifast", "-verbose", "1", "-skip_specless_fns", "-rustc_args", " ".join(flags)]
+    crate = runpy.run_path(str(here / "probe-verifast.py"))["CRATE"]
+    normalized = re.sub(r"(?m)^#\[rustc_diagnostic_item = ", "#[doc = ", atomic.decode())
+
+    with tempfile.TemporaryDirectory(prefix="atomic-ptr-") as directory:
+        work = Path(directory)
+        for doc in src.glob("atomic*.md"):
+            shutil.copyfile(doc, work / doc.name)
+        upstream = work / "lib.rs"
+        upstream.write_text(crate)
+        proof = work / "ptr.rs"
+
+        def compile_constructor(source, label):
+            output = logs / (label + ".ll")
+            status, diagnostics = checks["run"](
+                [rustc, *flags, "--emit=llvm-ir", "-C", "opt-level=2", source, "-o", output],
+                logs / (label + "-rustc.log"),
+            )
+            if status:
+                raise SystemExit(diagnostics)
+            return checks["normalize_dispatch"](output.read_text(), "ctor", "ptr")
+
+        def verify(source, label, diagnostic=None):
+            proof.write_text(source)
+            status, output = checks["run"]([*verifier, proof], logs / (label + ".log"), env)
+            if diagnostic is not None:
+                if not status or diagnostic not in output:
+                    raise SystemExit(f"Unexpected control result. See {label}.log")
+            elif status or not all(marker in output for marker in (
+                "0 errors found", "target: x86_64-unknown-linux-gnu",
+                *(f"Verifying function '{name}'" for name in (
+                    "AtomicPtr::from_ptr", "share_twice", "recover_slot",
+                )),
+            )):
+                raise SystemExit(f"Pointer proof or coverage failed. See {label}.log")
+
+        for size in SIZES:
+            generated = template.replace("$SIZE", str(size))
+            layout = LAYOUT.replace("$SIZE", str(size))
+            original_bridge = BRIDGE.replace(
+                "#[unsafe(no_mangle)]",
+                '#[stable(feature = "atomic_source_proof", since = "1.0.0")]\n#[unsafe(no_mangle)]',
+            )
+            (work / "atomic.rs").write_text(
+                normalized + f"\nstruct Pointee([u8; {size}]);\n"
+                + (layout + original_bridge).replace("$TYPE", "<Pointee>"),
+            )
+            suffix = (layout + BRIDGE).replace("$TYPE", "")
+            proof.write_text(generated + suffix)
+            original = compile_constructor(upstream, f"original-{size}")
+            if compile_constructor(proof, f"specialized-{size}") != original:
+                raise SystemExit(f"Compiled constructor differs at pointee size {size}")
+            verify(generated, f"proof-{size}")
+
+        # The last case supplies the baseline for the mutation controls.
+        generated = template.replace("$SIZE", str(SIZES[-1]))
+        proof.write_text(replace(generated, "&*ptr.cast()", "&*ptr.wrapping_add(1).cast()") + suffix)
+        if compile_constructor(proof, "changed-slot") == original:
+            raise SystemExit("Source comparison accepted a changed slot address")
+
+        verify(replace(generated, " &*& *ptr |-> ?value &*& ptr as usize", " &*& ptr as usize"),
+               "missing-slot", "No matching heap chunks: points_to")
+        verify(replace(generated, "*ptr |-> ?value &*& ptr as usize % std::mem::align_of::<AtomicPtr>() == 0;",
+                       "*ptr |-> ?value;"),
+               "missing-alignment", "alignof(AtomicPtr_type_info)) = 0")
+        verify(replace(generated, "close exists::<bool>(false);", "close exists::<bool>(true);"),
+               "double-fresh", "No matching heap chunks: points_to")
+        verify(replace(generated, "    //@ end_lifetime_m(k);\n", ""),
+               "live-recovery", "No matching heap chunks: [_]lifetime_dead_token")
+        verify(replace(generated, "#[repr(C, align(8))]", "#[repr(C, align(16))]"),
+               "wrong-alignment", "Cannot prove alignof(private::Align8_type_info) = 8")
+
+    print("AtomicPtr::from_ptr verified for pointee sizes 0, 1, 2, 3, and 4.")
+    print("Compiled constructors matched. Slot, lifetime, alignment and source controls passed.")
+
+
+if __name__ == "__main__":
+    main()
