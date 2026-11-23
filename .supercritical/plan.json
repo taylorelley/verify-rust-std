@@ -2,7 +2,7 @@
   "version": 1,
   "intended_use": "Verify the covered atomic operations on the current Challenge 7 source",
   "approval_basis": "Verify Rust Std Lib Challenge 7",
-  "target": "Current verify-rust-std atomic implementation, Linux x86-64 initial diagnostic target",
+  "target": "Current verify-rust-std atomic implementation, Linux x86-64 and AArch64 Linux proof targets",
   "files": [
     "library/core/src/sync/atomic.rs",
     "library/core/src/intrinsics/mod.rs",
@@ -28,7 +28,10 @@
     "verifast-proofs/core/sync/atomic.rs/check-from-ptr.py",
     "doc/src/challenges/0007-atomic-types.md",
     "verifast-proofs/core/sync/atomic.rs/ptr-access.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/ptr-wide-probe.rs"
+    "verifast-proofs/core/sync/atomic.rs/ptr-wide-probe.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-swap.py",
+    "verifast-proofs/core/sync/atomic.rs/swap.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/swap-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -60,6 +63,14 @@
       "behavior": "Every required from_ptr constructor meets the slot safety contract on a target that exposes it.",
       "implementation": [
         "library/core/src/sync/atomic.rs"
+      ]
+    },
+    "EXCHANGE-SAFETY": {
+      "source": "Challenge 7 Parts 2 and 3",
+      "behavior": "Atomic exchange preserves slot validity and lifetime and requires full atomic byte permission on the covered types and target.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
       ]
     }
   },
@@ -206,6 +217,24 @@
       "requirement": "PTR-SAFETY",
       "method": "test",
       "criterion": "Match compiled pointer-typed load and store branches and detect changed load and store orderings",
+      "independent": true
+    },
+    "SWAP-PERMISSIONS": {
+      "requirement": "EXCHANGE-SAFETY",
+      "method": "proof",
+      "criterion": "Verify all five exchange ordering branches for AtomicBool, the integer matrix and the five thin pointer specializations, and reject invalid Boolean values, read-only permission and wide pointers",
+      "independent": true
+    },
+    "SWAP-SOURCE": {
+      "requirement": "EXCHANGE-SAFETY",
+      "method": "test",
+      "criterion": "Compare the compiled exchange dispatches against the pinned source and detect changed orderings and changed return values",
+      "independent": true
+    },
+    "SWAP-CLIENT": {
+      "requirement": "EXCHANGE-SAFETY",
+      "method": "test",
+      "criterion": "Check the previous value and replacement under all five orderings with native and Miri clients, including dereferencing a returned live pointer",
       "independent": true
     }
   },

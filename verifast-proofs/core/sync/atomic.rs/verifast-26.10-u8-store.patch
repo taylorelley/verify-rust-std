@@ -1,54 +1,64 @@
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,47 @@
+@@ -1456,6 +1456,57 @@
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
-+  (* Select the existing primitive contract for the compiler's concrete
-+     ordinary u8, u16 and thin-pointer accesses. Other widths and volatile accesses need their own
-+     review and are deliberately rejected by this narrow proof frontend. *)
++  (* Dispatch concrete atomic operations to the matching primitive contract.
++     The pinned compiler exports AtomicOrdering as the enum variant index. *)
 +  and specialize_atomic_access (fn_ty : D.ty_kind_fn_def_ty) loc =
 +    match fn_ty.id.name with
 +    | ("core::intrinsics::atomic_store" | "std::intrinsics::atomic_store" |
-+       "core::intrinsics::atomic_load" | "std::intrinsics::atomic_load") as name ->
-+        let is_store = Filename.check_suffix name "atomic_store" in
-+        let operation = if is_store then "atomic_store" else "atomic_load" in
++       "core::intrinsics::atomic_load" | "std::intrinsics::atomic_load" |
++       "core::intrinsics::atomic_xchg" | "std::intrinsics::atomic_xchg") as name ->
++        let operation = List.hd (List.rev (String.split_on_char ':' name)) in
 +        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
++        let shape_error () =
++          let operand_order = "expected u8, u16 or a concrete thin pointer, a concrete AtomicOrdering" in
++          reject (if operation = "atomic_xchg" then "expected a concrete integer or thin pointer and a concrete AtomicOrdering"
++                  else operand_order ^ ", and VOLATILE=false")
++        in
 +        (match fn_ty.substs with
-+        | [
-+            ({kind = Type {kind = (UInt (U8 | U16) | RawPtr {is_thin = true; _})}} as operand);
-+            {kind = Const {kind = Value {
-+               ty = {kind = Adt {
-+                 id = {name = ("core::intrinsics::AtomicOrdering" |
-+                               "std::intrinsics::AtomicOrdering")};
-+                 kind = EnumKind; substs = [];
-+               }};
-+               val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
-+                 val_tree = Leaf {data = order; size = 4}}}];
-+             }}};
-+            {kind = Const {kind = Value {
-+               ty = {kind = Bool};
-+               val_tree = Leaf {data = volatile; size = 1};
-+             }}};
-+          ] when fn_ty.late_bound_generic_param_count = 0 ->
-+            if Stdint.Uint128.to_string (DecoderAux.uint128_get volatile) <> "0" then
-+              reject "only ordinary accesses (VOLATILE=false) are modeled";
++        | ({kind = Type {kind = operand_type}} as operand) ::
++          {kind = Const {kind = Value {
++             ty = {kind = Adt {
++               id = {name = ("core::intrinsics::AtomicOrdering" |
++                             "std::intrinsics::AtomicOrdering")};
++               kind = EnumKind; substs = [];
++             }};
++             val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++               val_tree = Leaf {data = order; size = 4}}}];
++           }}} :: rest when fn_ty.late_bound_generic_param_count = 0 ->
++            (match operand_type with
++            | UInt (U8 | U16) | RawPtr {is_thin = true; _} -> ()
++            | (Int _ | UInt _) when operation = "atomic_xchg" -> ()
++            | _ -> shape_error ());
++            (match rest with
++            | [] when operation = "atomic_xchg" -> ()
++            | [{kind = Const {kind = Value {
++                 ty = {kind = Bool};
++                 val_tree = Leaf {data = volatile; size = 1};
++               }}}] when operation <> "atomic_xchg" ->
++                if Stdint.Uint128.to_string (DecoderAux.uint128_get volatile) <> "0" then
++                  reject "only ordinary accesses (VOLATILE=false) are modeled"
++            | _ -> shape_error ());
 +            let suffix =
 +              match Stdint.Uint128.to_string (DecoderAux.uint128_get order) with
 +              | "0" -> "relaxed"
-+              | "1" when is_store -> "release"
-+              | "2" when not is_store -> "acquire"
++              | "1" when operation <> "atomic_load" -> "release"
++              | "2" when operation <> "atomic_store" -> "acquire"
++              | "3" when operation = "atomic_xchg" -> "acqrel"
 +              | "4" -> "seqcst"
 +              | _ -> reject "unsupported ordering for an ordinary access"
 +            in
 +            Some ("std::intrinsics::" ^ operation ^ "_" ^ suffix, [operand])
-+        | _ -> reject "expected u8, u16 or a concrete thin pointer, a concrete AtomicOrdering, and VOLATILE=false")
++        | _ -> shape_error ())
 +    | _ -> None
 +
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2427,17 @@
+@@ -2386,17 +2437,17 @@
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -76,7 +86,7 @@
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6319,14 @@
+@@ -6278,7 +6329,14 @@
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -92,7 +102,7 @@
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7684,8 @@
+@@ -7636,8 +7694,8 @@
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -156,7 +166,7 @@
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +402,23 @@
+@@ -358,6 +402,49 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      
@@ -175,6 +185,32 @@
 +    unsafe fn atomic_load_seqcst<T>(src: *const T) -> T;
 +    //@ req [?f]atomic_points_to(src as *T, ?permission, ?valid);
 +    //@ ens [f]atomic_points_to(src as *T, permission, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    // Exchange preserves the slot invariant and returns a value satisfying it.
++    unsafe fn atomic_xchg_relaxed<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_acquire<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_release<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_acqrel<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_seqcst<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
 +    //@ on_unwind_ens false;
 +
  }

@@ -220,6 +220,47 @@ lifetime and alignment rules. Pointer provenance and concurrent memory-model
 behavior are outside these claims. The trusted alignment and intrinsic
 contracts and the source comparison still require independent review.
 
+## Atomic exchange
+
+Run the exchange proof with the rebuilt verifier and pinned source compiler.
+Install the AArch64 target libraries for both nightlies as in the constructor replay.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-swap.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-swap
+"$rustc_path" --edition=2024 --test "$proof/swap-client.rs" -o /tmp/challenge-7-swap-client
+/tmp/challenge-7-swap-client
+```
+
+The specialized wrappers cover `AtomicBool`, all signed and unsigned
+integer widths in the constructor matrix, integers of pointer width,
+and `AtomicPtr` at five pointee sizes. The trusted
+`atomic_xchg` contracts require full byte permission to the slot and an
+input satisfying its invariant. They preserve the permission and guarantee
+that the returned value satisfies the same invariant. The proof restores
+the lifetime token after the exchange and verifies the Boolean byte
+invariant. It rejects an exchange with a read-only byte fraction, an
+invalid Boolean byte or a wide pointer operand.
+
+The source comparison checks the full LLVM dispatch for the five legal
+orderings and detects changes to the ordering or return value. The native
+and Miri tests check that an exchange returns the previous value and writes
+the replacement. The pointer tests dereference the returned live pointer.
+To run under Miri, use `swap-client.rs` as `src/lib.rs` in the pointer
+client procedure above. Add `--target aarch64-unknown-linux-gnu` to run
+the 128-bit cases under Miri without AArch64 hardware.
+
+The 128-bit proofs use the AArch64 Linux target. The other proofs and
+native tests use Linux x86-64. The Miri tests run on both targets.
+A successful proof replay writes the per-case results to `coverage.json`.
+The scope covers the native Boolean implementation and excludes the
+emulation path. The formal contract does not describe value history, pointer
+provenance or synchronization semantics. The primitive contracts and
+the source comparison await independent review.
+
 ## Complete constructor replay
 
 Install the AArch64 target libraries for both pinned Rust toolchains. The
