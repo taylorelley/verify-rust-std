@@ -202,3 +202,34 @@ without dereferencing them.
 The proof covers the constructor on Linux x86-64. Its atomic alignment
 premise for thin pointers and source comparison still require independent
 review. Ordinary pointer loads and stores have no formal proof here.
+
+## Complete constructor replay
+
+Install the AArch64 target libraries for both pinned Rust toolchains. The
+replay runs on a Linux x86-64 host and cross-compiles the 128-bit
+constructors for AArch64 Linux. The AArch64 proofs run symbolically on
+the host using the AArch64 layout exported by rustc.
+
+```sh
+rustup target add --toolchain nightly-2026-09-25 aarch64-unknown-linux-gnu
+rustup target add --toolchain nightly-2026-11-19 aarch64-unknown-linux-gnu
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-from-ptr.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-constructors
+```
+
+The runner verifies every integer constructor with a fresh share and with
+an existing share. It checks slot ownership recovery after the modeled
+lifetime and rejects uninitialized storage, early recovery, incorrect
+layout, and a changed slot address. It reruns the Boolean and pointer
+proofs and checks the results against the constructor list in Challenge 7.
+A successful run writes `coverage.json` with the proof target for each
+type. The signed and unsigned pointer-sized integers are tracked as extras.
+
+The review boundary includes the patched verifier's compiler-derived
+alignment, the trusted intrinsic alignment premises, the lifetime and
+permission contracts, and the specialization comparison. The AArch64
+results are proofs of the cross-target model. Native AArch64 execution
+and independent review remain open.

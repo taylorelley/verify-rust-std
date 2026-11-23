@@ -94,13 +94,49 @@
                Ast.TypedefDecl
 --- a/bin/rust/std/lib.rsspec
 +++ b/bin/rust/std/lib.rsspec
-@@ -327,6 +327,14 @@
+@@ -327,6 +327,50 @@
          req true;
          ens atomic_align_of::<u8>() == 1;
      
 +    lem_auto atomic_align_of_u16();
 +        req true;
 +        ens atomic_align_of::<u16>() == 2;
++    lem_auto atomic_align_of_i8();
++        req true;
++        ens atomic_align_of::<i8>() == 1;
++
++    lem_auto atomic_align_of_i16();
++        req true;
++        ens atomic_align_of::<i16>() == 2;
++
++    lem_auto atomic_align_of_i32();
++        req true;
++        ens atomic_align_of::<i32>() == 4;
++
++    lem_auto atomic_align_of_u32();
++        req true;
++        ens atomic_align_of::<u32>() == 4;
++
++    lem_auto atomic_align_of_i64();
++        req true;
++        ens atomic_align_of::<i64>() == 8;
++
++    lem_auto atomic_align_of_u64();
++        req true;
++        ens atomic_align_of::<u64>() == 8;
++
++    lem_auto atomic_align_of_i128();
++        req true;
++        ens atomic_align_of::<i128>() == 16;
++
++    lem_auto atomic_align_of_u128();
++        req true;
++        ens atomic_align_of::<u128>() == 16;
++
++    lem_auto atomic_align_of_isize();
++        req true;
++        ens atomic_align_of::<isize>() == std::mem::size_of::<usize>();
++
 +    // Thin pointer storage on the target uses the pointer-sized atomic ABI.
 +    lem atomic_align_of_ptr<T>();
 +        req true;
@@ -109,7 +145,7 @@
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +366,23 @@
+@@ -358,6 +402,23 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      

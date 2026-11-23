@@ -23,8 +23,10 @@
     "verifast-proofs/core/sync/atomic.rs/check-u16.py",
     "verifast-proofs/core/sync/atomic.rs/u16-proof.rs",
     "verifast-proofs/core/sync/atomic.rs/check-ptr.py",
-    "verifast-proofs/core/sync/atomic.rs/ptr-proof.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/ptr-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/slot-constructor.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/ptr-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-from-ptr.py",
+    "doc/src/challenges/0007-atomic-types.md"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -46,6 +48,13 @@
     "PTR-SAFETY": {
       "source": "Challenge 7 Part 1",
       "behavior": "AtomicPtr::from_ptr converts a live aligned initialized pointer slot without requiring a valid pointee.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs"
+      ]
+    },
+    "CONSTRUCTOR-COVERAGE": {
+      "source": "Challenge 7 Part 1",
+      "behavior": "Every required from_ptr constructor meets the slot safety contract on a target that exposes it.",
       "implementation": [
         "library/core/src/sync/atomic.rs"
       ]
@@ -170,6 +179,18 @@
       "requirement": "PTR-SAFETY",
       "method": "test",
       "criterion": "Exercise arbitrary-address representatives without dereferencing the stored pointer",
+      "independent": true
+    },
+    "INTEGER-CONSTRUCTOR-MATRIX": {
+      "requirement": "CONSTRUCTOR-COVERAGE",
+      "method": "proof",
+      "criterion": "Verify all ten required integer constructor specializations with initialized storage, lifetime, alignment, and ownership recovery controls",
+      "independent": true
+    },
+    "CONSTRUCTOR-COVERAGE-REPLAY": {
+      "requirement": "CONSTRUCTOR-COVERAGE",
+      "method": "test",
+      "criterion": "Compare compiled constructor bodies, detect changed slot addresses, and confirm all required constructors ran on eligible targets",
       "independent": true
     }
   },

@@ -3,12 +3,14 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import runpy
 import shutil
 import subprocess
+from string import Template
 import tempfile
 
 SIZES = (0, 1, 2, 3, 4)
@@ -43,9 +45,18 @@ def main():
     atomic = (src / "atomic.rs").read_bytes()
     if hashlib.sha256(atomic).hexdigest() != constructor["SOURCE_SHA256"]:
         raise SystemExit("Atomic source changed. Review the pointer specialization.")
-    template = (here / "ptr-proof.rs.in").read_text()
+    template = Template((here / "slot-constructor.rs.in").read_text())
+
+    def render(size):
+        return template.substitute(POINTEE=f"pub struct Pointee([u8; {size}]);",
+                                   OPERAND="*mut Pointee", FIELD="*mut super::Pointee",
+                                   ATOMIC="AtomicPtr", WIDTH=8,
+                                   ALIGN_LEMMA="atomic_align_of_ptr::<Pointee>()")
     logs = args.logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)
+    coverage = logs / "coverage.json"
+    coverage.unlink(missing_ok=True)
+    verified_sizes = []
     runtime = args.verifast_bin.resolve()
     rustc = args.rustc.resolve()
     env = os.environ.copy()
@@ -90,7 +101,7 @@ def main():
                 raise SystemExit(f"Pointer proof or coverage failed. See {label}.log")
 
         for size in SIZES:
-            generated = template.replace("$SIZE", str(size))
+            generated = render(size)
             layout = LAYOUT.replace("$SIZE", str(size))
             original_bridge = BRIDGE.replace(
                 "#[unsafe(no_mangle)]",
@@ -106,9 +117,10 @@ def main():
             if compile_constructor(proof, f"specialized-{size}") != original:
                 raise SystemExit(f"Compiled constructor differs at pointee size {size}")
             verify(generated, f"proof-{size}")
+            verified_sizes.append(size)
 
         # The last case supplies the baseline for the mutation controls.
-        generated = template.replace("$SIZE", str(SIZES[-1]))
+        generated = render(SIZES[-1])
         proof.write_text(replace(generated, "&*ptr.cast()", "&*ptr.wrapping_add(1).cast()") + suffix)
         if compile_constructor(proof, "changed-slot") == original:
             raise SystemExit("Source comparison accepted a changed slot address")
@@ -123,8 +135,9 @@ def main():
         verify(replace(generated, "    //@ end_lifetime_m(k);\n", ""),
                "live-recovery", "No matching heap chunks: [_]lifetime_dead_token")
         verify(replace(generated, "#[repr(C, align(8))]", "#[repr(C, align(16))]"),
-               "wrong-alignment", "Cannot prove alignof(private::Align8_type_info) = 8")
+               "wrong-alignment", "Cannot prove alignof(private::AlignedSlot_type_info) = 8")
 
+    coverage.write_text(json.dumps({"target": "x86_64-unknown-linux-gnu", "pointee_sizes": verified_sizes}) + "\n")
     print("AtomicPtr::from_ptr verified for pointee sizes 0, 1, 2, 3, and 4.")
     print("Compiled constructors matched. Slot, lifetime, alignment and source controls passed.")
 
