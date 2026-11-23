@@ -1,6 +1,6 @@
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,57 @@
+@@ -1456,6 +1456,83 @@
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
@@ -53,12 +53,38 @@
 +            in
 +            Some ("std::intrinsics::" ^ operation ^ "_" ^ suffix, [operand])
 +        | _ -> shape_error ())
++    | ("core::intrinsics::atomic_cxchg" | "std::intrinsics::atomic_cxchg" |
++       "core::intrinsics::atomic_cxchgweak" | "std::intrinsics::atomic_cxchgweak") as name ->
++        let operation = if Filename.check_suffix name "atomic_cxchgweak" then "atomic_cxchgweak" else "atomic_cxchg" in
++        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
++        let decode_order (arg : D.generic_arg) =
++          match arg.kind with
++          | Const {kind = Value {
++              ty = {kind = Adt {
++                id = {name = ("core::intrinsics::AtomicOrdering" |
++                              "std::intrinsics::AtomicOrdering")};
++                kind = EnumKind; substs = [];
++              }};
++              val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++                val_tree = Leaf {data = order; size = 4}}}];
++            }} -> Stdint.Uint128.to_string (DecoderAux.uint128_get order)
++          | _ -> reject "expected a concrete AtomicOrdering"
++        in
++        (match fn_ty.substs with
++        | [({kind = Type {kind = (Int _ | UInt _ | RawPtr {is_thin = true; _})}} as operand);
++           success; failure] when fn_ty.late_bound_generic_param_count = 0 ->
++            (match decode_order success, decode_order failure with
++            | ("0" | "1" | "2" | "3" | "4"), ("0" | "2" | "4") ->
++                (* Ordering variants share the storage-safety contract. *)
++                Some ("std::intrinsics::" ^ operation ^ "_safety", [operand])
++            | _ -> reject "unsupported success or failure ordering")
++        | _ -> reject "expected a concrete integer or thin pointer and two orderings")
 +    | _ -> None
 +
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2437,17 @@
+@@ -2386,17 +2463,17 @@
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -86,7 +112,7 @@
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6329,14 @@
+@@ -6278,7 +6355,14 @@
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -102,7 +128,7 @@
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7694,8 @@
+@@ -7636,8 +7720,8 @@
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -166,7 +192,7 @@
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +402,49 @@
+@@ -358,6 +402,62 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      
@@ -211,6 +237,19 @@
 +    unsafe fn atomic_xchg_seqcst<T>(dst: *mut T, val: T) -> T;
 +    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
 +    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++
++    // Both forms may write, so both require full byte permission. The
++    // safety model permits either outcome and constrains the observed value.
++    unsafe fn atomic_cxchg_safety<T>(dst: *mut T, old: T, new: T) -> (T, bool);
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(old) == true &*& valid(new) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result.0) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_cxchgweak_safety<T>(dst: *mut T, old: T, new: T) -> (T, bool);
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(old) == true &*& valid(new) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result.0) == true;
 +    //@ on_unwind_ens false;
 +
  }

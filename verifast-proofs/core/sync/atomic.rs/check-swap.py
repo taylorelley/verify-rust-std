@@ -36,9 +36,9 @@ pub fn sc_verify_swap(a: &${TYPE}, value: $PUBLIC, order: Ordering) -> $PUBLIC {
 """
 
 
-def canonical_dispatch(ir):
+def canonical_dispatch(ir, name="sc_verify_swap"):
     """Preserve the CFG, instruction order and operands while renaming identifiers."""
-    match = re.search(r"^define [^\n]*@sc_verify_swap\([^\n]*\{\n(.*?)^}", ir, re.S | re.M)
+    match = re.search(rf"^define [^\n]*@{re.escape(name)}\([^\n]*\{{\n(.*?)^}}", ir, re.S | re.M)
     if not match:
         raise SystemExit("The compiler did not emit the exchange dispatch")
     body = re.sub(r"(?m)\s*;[^\n]*$", "", match[1])

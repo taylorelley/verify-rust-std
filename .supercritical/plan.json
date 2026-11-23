@@ -31,7 +31,10 @@
     "verifast-proofs/core/sync/atomic.rs/ptr-wide-probe.rs",
     "verifast-proofs/core/sync/atomic.rs/check-swap.py",
     "verifast-proofs/core/sync/atomic.rs/swap.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/swap-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/swap-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-compare-exchange.py",
+    "verifast-proofs/core/sync/atomic.rs/compare-exchange.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/compare-exchange-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -68,6 +71,14 @@
     "EXCHANGE-SAFETY": {
       "source": "Challenge 7 Parts 2 and 3",
       "behavior": "Atomic exchange preserves slot validity and lifetime and requires full atomic byte permission on the covered types and target.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "COMPARE-EXCHANGE-SAFETY": {
+      "source": "Challenge 7 Parts 2 and 3",
+      "behavior": "Strong and weak compare-exchange preserve slot validity and lifetime under full atomic byte permissions, including valid storage on unwind for invalid failure orderings.",
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
@@ -235,6 +246,24 @@
       "requirement": "EXCHANGE-SAFETY",
       "method": "test",
       "criterion": "Check the previous value and replacement under all five orderings with native and Miri clients, including dereferencing a returned live pointer",
+      "independent": true
+    },
+    "CAS-PERMISSIONS": {
+      "requirement": "COMPARE-EXCHANGE-SAFETY",
+      "method": "proof",
+      "criterion": "Verify strong and weak compare-exchange across all covered slot types and reject an invalid Boolean byte, a read-only byte fraction, and a release failure ordering at the primitive boundary",
+      "independent": true
+    },
+    "CAS-SOURCE": {
+      "requirement": "COMPARE-EXCHANGE-SAFETY",
+      "method": "test",
+      "criterion": "Compare every success and failure ordering pair against the pinned compiler output and detect mutations to either ordering, the result variant and weak versus strong lowering",
+      "independent": true
+    },
+    "CAS-CLIENT": {
+      "requirement": "COMPARE-EXCHANGE-SAFETY",
+      "method": "test",
+      "criterion": "Exercise the success, mismatch, invalid ordering and spurious failure paths with native and Miri clients",
       "independent": true
     }
   },

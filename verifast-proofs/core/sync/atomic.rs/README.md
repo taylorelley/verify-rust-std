@@ -261,6 +261,56 @@ emulation path. The formal contract does not describe value history, pointer
 provenance or synchronization semantics. The primitive contracts and
 the source comparison await independent review.
 
+## Strong and weak compare-exchange
+
+Use the same rebuilt verifier, pinned compiler and AArch64 target libraries
+as the exchange replay.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-compare-exchange.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-compare-exchange
+"$rustc_path" --edition=2024 --test "$proof/compare-exchange-client.rs" \
+  -o /tmp/challenge-7-compare-exchange-client
+/tmp/challenge-7-compare-exchange-client
+```
+
+The safety contracts for both compiler intrinsics require full byte
+permission, valid operands and a live aligned slot. They preserve the
+storage invariant and constrain the observed value on either outcome.
+The wrapper proofs check that Boolean results come from a valid Boolean
+byte and that invalid failure orderings unwind with the lifetime and
+thread tokens intact. The verifier rejects a read-only slot permission,
+an invalid Boolean replacement and a release failure ordering at an
+intrinsic call.
+
+The source check compares each of the 25 ordering pairs per method for
+the 18 specializations in the exchange matrix. It checks typed
+`cmpxchg` instructions with both orderings, the presence or absence of
+`weak`, and panic-only paths for invalid pairs. It detects mutations to
+both orderings, result variants and operation strength. The replay
+writes the per-case results to `coverage.json`.
+
+The runtime client tests success, mismatch and invalid failure ordering.
+Use `compare-exchange-client.rs` as `src/lib.rs` in the Miri procedure
+above. Run on both targets to exercise the 128-bit cases. To replay
+spurious failure for each legal pair, run the ignored test with an
+elevated Miri failure rate and a fixed seed:
+
+```sh
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-seed=0 -Zmiri-compare-exchange-weak-failure-rate=0.9" \
+  cargo +nightly-2026-11-19 miri test --offline -- --ignored
+```
+
+The proof covers the native Boolean implementation and the same integer
+and pointer specializations as exchange. The storage-safety contracts
+permit either outcome for both strengths. The source and runtime checks
+provide the evidence about strong versus weak behavior. A formal model
+of synchronization and pointer provenance, and independent review of the
+trusted contracts, remain open.
+
 ## Complete constructor replay
 
 Install the AArch64 target libraries for both pinned Rust toolchains. The
