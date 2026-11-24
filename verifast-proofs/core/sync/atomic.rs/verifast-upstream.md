@@ -22,6 +22,9 @@ patch, and add `verify.sh` to `verifast-proofs/check-verifast-proofs.sh`.
 | 4 | Predicate constructor arguments in assertions | Bug fix | `Type mismatch. Actual: *Wrap<V>. Expected: *T.` |
 | 5 | Contracts of macro-generated functions | Bug fix (silent) | `No error found on line.`: the second expansion is never verified |
 | 6 | Refinement checker: const parameters and enum constants | Feature and build fix | `Clause kind not supported` |
+| 7 | Thin pointers with a generic `Sized` pointee | Feature | `atomic_xchg: expected a concrete integer or thin pointer ...` |
+| 8 | `Self` in ghost code of inherent impls | Feature | `No such type parameter ...: Self` |
+| 9 | Inferred type arguments in `open` and `close` of predicate constructors | Feature | `Incorrect number of type arguments` |
 
 Each row has a test under `tests/rust`. All of them fail on unpatched 26.10 with
 the error shown and pass with the patch. Together, the changes let VeriFast
@@ -244,41 +247,108 @@ real code.
 **Test.** `tests/rust/refinement_checker/const_args_*.rs`: identical code must
 pass, and a changed ordering must fail.
 
-## Not included: known limitations
+## 7. Thin pointers with a generic `Sized` pointee
 
-* **Sharing predicates for generic structs over a sealed trait.** The safe
-  methods of `AtomicBool` and the integer atomics take `&self`, so their
-  semantic well-typedness needs `<Atomic<T>>.share`.
-  * VeriFast requires one generic definition, and a `share_full` lemma proved
-    for all `T`.
-  * That lemma would have to turn plain ownership of the struct into an atomic
-    permission at the operand type. That is `u8` with a 0-or-1 invariant for
-    `bool`, and `T` otherwise, which is not expressible generically.
-  * `AtomicPrimitive` is `impl(self)`, so its instances form a closed set.
-  * Allowing per-instance type predicate definitions and proof obligations for
-    such a struct would close this gap. It is a design question for the
-    maintainers, and the reason the public atomic methods are still checked
-    through specialized copies.
-* **Thin-ness of generic pointees.** The exporter decides `is_thin` only for
-  concrete pointee types, so `atomic_xchg::<*mut T, _>` with a generic `T` is
-  rejected even when `T: Sized`. Computing it in the function's typing
-  environment would fix this.
-* **`Self` in ghost code.** Ghost code in an `impl` block cannot name `Self`. The
-  atomic proof works around it with a generic `fix atomic_view<T>(p: *T)`, so
-  that the type is inferred from an argument.
-* **Type inference for `close` of generic predicate constructors.** `close C(p)()`
-  requires explicit type arguments even when they follow from `p`.
+**Problem.** The exporter decides whether a raw pointer is thin only for
+concrete types. So `atomic_xchg::<*mut T, _>` in a function with `T: Sized` is
+rejected, although the pointer is thin for every instantiation.
+
+**Change.** In a function body, the exporter asks rustc for the pointer's layout
+in that function's typing environment. `*mut T` with `T: Sized` is thin, and
+`*mut T` with `T: ?Sized` is still rejected.
+
+**General benefit.** Generic code over raw pointers, such as
+`AtomicPtr<T>`-style containers and intrusive lists, can use the atomic
+contracts without a concrete pointee.
+
+**Test.** `swap_ptr` in `tests/rust/purely_unsafe/atomic_intrinsics.rs`, and
+`atomic_intrinsics_wide_ptr.rs`, where the pointee is `?Sized` and the call
+must still be rejected.
+
+## 8. `Self` in ghost code of inherent impls
+
+**Problem.** Ghost code in `impl Foo { ... }` cannot name `Self`, so a
+specification inside a macro-generated impl cannot name the type it is about.
+The Challenge 7 proof originally worked around this with a generic
+`fix atomic_view<T>(p: *T) -> *Atomic<T>` whose type was inferred from an
+argument.
+
+**Change.**
+* For a function in an inherent impl, the exporter sends the impl's self type
+  (`isInherentImplFn`, `inherentImplSelfTy`).
+* The translator declares a type alias for it, generic over the impl's
+  parameters.
+* The translator rewrites the identifier `Self` in that function's annotations
+  to the alias. Trait methods, where `Self` is already a type parameter, are
+  unchanged.
+* The rewrite is textual, so an error inside an annotation that mentions `Self`
+  is reported a few columns off. A parser-level alias would avoid that, if the
+  maintainers prefer.
+
+**General benefit.** Specifications can be written as in Rust, for example
+`ptr as usize % align_of::<Self>() == 0`, in plain impls and in the
+macro-generated impls that are common in the standard library.
+
+**Test.** `tests/rust/self_in_ghost.rs` covers concrete, generic and
+macro-generated impls, and a size claim about the wrong type, which must still
+fail.
+
+## 9. Inferred type arguments in `open` and `close`
+
+**Problem.** `close C(p)()` for a generic predicate constructor `C<T>(p: *T)`
+fails with `Incorrect number of type arguments`, even though `T` follows from
+`p`. Assertions already infer such arguments.
+
+**Change.** When no type arguments are given, `open` and `close` create
+inference variables for them and resolve them from the constructor arguments.
+A type argument that cannot be inferred is reported as such.
+
+**General benefit.** Proofs no longer need explicit type arguments, which are
+especially awkward inside macros.
+
+**Test.** `tests/rust/pred_ctor_infer_targs.rs` covers an inferred round trip,
+and a constructor whose type parameter does not occur in its arguments, which
+must still fail.
+
+## Not included: per-instance sharing predicates
+
+The safe methods of `AtomicBool` and the integer atomics take `&self`, so
+their semantic well-typedness needs `<Atomic<T>>.share`.
+
+* VeriFast requires one generic definition, and a `share_full` lemma proved for
+  all `T`.
+* That lemma must turn plain ownership into an atomic permission at the operand
+  type. That is `u8` restricted to 0 and 1 for `bool`, and `T` otherwise,
+  reached through `T::Storage`.
+* That cannot be expressed generically without changing how VeriFast models
+  safe types.
+* `AtomicPrimitive` is `impl(self)`, so its instances form a closed set.
+
+Two designs would close the gap:
+* per-instance type predicate definitions and proof obligations for structs
+  generic over a sealed trait;
+* or normalization of associated types through local impls, together with
+  provable typeid distinctness and exhaustiveness over the sealed trait's
+  impls.
+
+A related, separate problem is that the methods take the permission out of a
+shared borrow before calling a helper that may panic. The helper contracts
+would therefore also need a form that takes the borrowed permission and opens
+it only in branches that do not unwind.
+
+Until the maintainers settle on a design, the public atomic methods are
+checked through specialized copies and compiled-code comparison.
 
 ## Suggested pull requests
 
 The changes are independent enough to review separately. A possible order:
 
 1. Item 4, the predicate-constructor fix, and item 5, the macro contract fix.
-   These are small bug fixes with tests.
-2. Item 2, associated-type projections.
+   These are small bug fixes with tests. Item 9 fits with them.
+2. Item 2, associated-type projections, and item 8, `Self` in ghost code.
 3. Item 6, the refinement checker.
 4. Item 3, compiler-exported alignment.
-5. Item 1, const-generic atomic intrinsics and their contracts. This item adds
+5. Item 1, const-generic atomic intrinsics and their contracts, with item 7. This item adds
    trusted specifications and will need the closest review.
 
 `tests/rust/testsuite.mysh` and `tests/rust/refinement_checker/testsuite.mysh`

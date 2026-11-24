@@ -387,12 +387,6 @@ pub struct Atomic<T: AtomicPrimitive> {
 
 /*@
 
-// The atomic view of a location holding a T.
-fix atomic_view<T>(p: *T) -> *Atomic<T> { p as *Atomic<T> }
-
-// The alignment that from_ptr requires of a location holding a T.
-fix atomic_view_align<T>(p: *T) -> usize { std::mem::align_of::<Atomic<T> >() }
-
 // What an atomic reference grants for its lifetime: atomic access to the slot at
 // the operand type, which preserves the slot's value invariant.
 pred_ctor atomic_slot<T>(p: *T, inv_: fix(T, bool))(;) = std::intrinsics::atomic_points_to(p, 1, inv_);
@@ -705,13 +699,13 @@ impl AtomicBool {
     pub const unsafe fn from_ptr<'a>(ptr: *mut bool) -> &'a AtomicBool
     /*@
     req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*&
-        ptr as usize % atomic_view_align(ptr) == 0 &*&
+        ptr as usize % std::mem::align_of::<Self>() == 0 &*&
         exists::<bool>(?fresh) &*&
         if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr as *u8, bool_byte)) };
     @*/
     /*@
     ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*&
-        ref_origin(result) == ref_origin(atomic_view(ptr)) &*&
+        ref_origin(result) == ref_origin(ptr as *Self) &*&
         [_]frac_borrow('a, atomic_slot(ptr as *u8, bool_byte)) &*& [_]frac_borrow('a, ref_initialized_(result)) &*&
         if fresh { borrow_end_token('a, initialized(ptr)) } else { true };
     @*/
@@ -719,7 +713,7 @@ impl AtomicBool {
     {
         //@ open exists(fresh);
         //@ if fresh { atomic_slot_new_bool('a, ptr); }
-        //@ let p = precreate_ref(atomic_view(ptr));
+        //@ let p = precreate_ref(ptr as *Self);
         //@ atomic_ref_init('a, p);
         //@ let f = open_frac_borrow('a, ref_initialized_(p), q);
         //@ atomic_ref_unwrap(p);
@@ -1766,13 +1760,13 @@ impl<T> AtomicPtr<T> {
     pub const unsafe fn from_ptr<'a>(ptr: *mut *mut T) -> &'a AtomicPtr<T>
     /*@
     req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*&
-        ptr as usize % atomic_view_align(ptr) == 0 &*&
+        ptr as usize % std::mem::align_of::<Self>() == 0 &*&
         exists::<bool>(?fresh) &*&
         if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) };
     @*/
     /*@
     ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*&
-        ref_origin(result) == ref_origin(atomic_view(ptr)) &*&
+        ref_origin(result) == ref_origin(ptr as *Self) &*&
         [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) &*& [_]frac_borrow('a, ref_initialized_(result)) &*&
         if fresh { borrow_end_token('a, initialized(ptr)) } else { true };
     @*/
@@ -1781,7 +1775,7 @@ impl<T> AtomicPtr<T> {
         //@ open exists(fresh);
         //@ std::intrinsics::atomic_align_of_ptr::<T>();
         //@ if fresh { atomic_slot_new('a, ptr); }
-        //@ let p = precreate_ref(atomic_view(ptr));
+        //@ let p = precreate_ref(ptr as *Self);
         //@ atomic_ref_init('a, p);
         //@ let f = open_frac_borrow('a, ref_initialized_(p), q);
         //@ atomic_ref_unwrap(p);
@@ -3092,13 +3086,13 @@ macro_rules! atomic_int {
         pub const unsafe fn from_ptr<'a>(ptr: *mut $int_type) -> &'a $atomic_type
             /*@
             req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*&
-                ptr as usize % atomic_view_align(ptr) == 0 &*&
+                ptr as usize % std::mem::align_of::<Self>() == 0 &*&
                 exists::<bool>(?fresh) &*&
                 if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) };
             @*/
             /*@
             ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*&
-                ref_origin(result) == ref_origin(atomic_view(ptr)) &*&
+                ref_origin(result) == ref_origin(ptr as *Self) &*&
                 [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) &*& [_]frac_borrow('a, ref_initialized_(result)) &*&
                 if fresh { borrow_end_token('a, initialized(ptr)) } else { true };
             @*/
@@ -3106,7 +3100,7 @@ macro_rules! atomic_int {
             {
                 //@ open exists(fresh);
                 //@ if fresh { atomic_slot_new('a, ptr); }
-                //@ let p = precreate_ref(atomic_view(ptr));
+                //@ let p = precreate_ref(ptr as *Self);
                 //@ atomic_ref_init('a, p);
                 //@ let f = open_frac_borrow('a, ref_initialized_(p), q);
                 //@ atomic_ref_unwrap(p);

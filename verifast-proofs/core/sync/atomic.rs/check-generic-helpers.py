@@ -270,7 +270,7 @@ def main():
 
         # An integer constructor without the documented alignment requirement.
         module_control_at("ctor-int-missing-alignment", "macro",
-                          "ptr as usize % atomic_view_align(ptr) == 0 &*&", "true &*&",
+                          "ptr as usize % std::mem::align_of::<Self>() == 0 &*&", "true &*&",
                           "std::intrinsics::atomic_align_of(int8_t_typeid)) = 0")
         # A fresh Boolean conversion without an initialized location.
         module_control_at("ctor-bool-uninitialized", None,

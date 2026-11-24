@@ -231,7 +231,7 @@ index 959ce64..c53c6da 100644
    IntConst n -> C ("IntConst", [BigInt n])
  | BoolConst b -> C ("BoolConst", [B b])
 diff --git a/src/refinement_checker/refinement_checker.ml b/src/refinement_checker/refinement_checker.ml
-index 77c3c28..32fc587 100644
+index 77c3c28..1108c4e 100644
 --- a/src/refinement_checker/refinement_checker.ml
 +++ b/src/refinement_checker/refinement_checker.ml
 @@ -105,6 +105,7 @@ type literal_const_expr =
@@ -294,7 +294,16 @@ index 77c3c28..32fc587 100644
                  }
                };
                source_info={span}
-@@ -632,7 +634,7 @@ let fns_to_be_inlined: (string * body) list =
+@@ -619,6 +621,8 @@ let fns_to_be_inlined: (string * body) list =
+       clauses=[];
+       is_trait_fn=false;
+       is_drop_fn=false;
++      is_inherent_impl_fn=false;
++      inherent_impl_self_ty={kind=Tuple []};
+       visibility=Public;
+     }
+   );
+@@ -632,7 +636,7 @@ let fns_to_be_inlined: (string * body) list =
    in
    let local_decls: local_decl list =
      [
@@ -303,7 +312,7 @@ index 77c3c28..32fc587 100644
        {id={name="self"}; ty={kind=Ref {region={id="'<erased>"}; mutability=Not; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}}}; mutability=Not; source_info={span}};
        {id={name="b"}; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}; mutability=Not; source_info={span}};
      ]
-@@ -667,7 +669,7 @@ let fns_to_be_inlined: (string * body) list =
+@@ -667,7 +671,7 @@ let fns_to_be_inlined: (string * body) list =
                    local_is_mutable=false;
                    kind=Other
                  };
@@ -312,7 +321,7 @@ index 77c3c28..32fc587 100644
                }
              };
              source_info={span}
-@@ -684,7 +686,7 @@ let fns_to_be_inlined: (string * body) list =
+@@ -684,7 +688,7 @@ let fns_to_be_inlined: (string * body) list =
      def_path="std::boxed::Box::<T, A>::as_ptr";
      module_def_path="std::boxed";
      contract={annotations=[]; span};
@@ -321,7 +330,52 @@ index 77c3c28..32fc587 100644
      inputs=[
        {kind=Ref {region={id="'<erased>"}; mutability=Not; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}}};
      ];
-@@ -2257,6 +2259,13 @@ let check_clause_refines_clause genv0 clause0 genv1 clause1 =
+@@ -716,6 +720,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   }
+   );
+@@ -955,6 +961,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   });
+   ("std::result::Result::<T, E>::map_err",
+@@ -1193,6 +1201,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   });
+   ("std::option::Option::<T>::map",
+@@ -1409,6 +1419,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   });
+   "std::option::Option::<T>::unwrap_or_else",
+@@ -1589,6 +1601,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   }
+ ]
+@@ -2257,6 +2271,13 @@ let check_clause_refines_clause genv0 clause0 genv1 clause1 =
        let generic_args0 = trait_clause0.args in
        let generic_args1 = trait_clause1.args in
        if List.map (decode_gen_arg genv0) generic_args0 <> List.map (decode_gen_arg genv1) generic_args1 then failwith "The two trait clauses have different generic arguments"
@@ -335,7 +389,7 @@ index 77c3c28..32fc587 100644
    | Projection projection_clause0, Projection projection_clause1 ->
        let proj_term0 = projection_clause0.projection_term in
        let proj_term1 = projection_clause1.projection_term in
-@@ -2335,6 +2344,10 @@ let check_body_refines_body bodies0 bodies1 def_path body0 body1 =
+@@ -2335,6 +2356,10 @@ let check_body_refines_body bodies0 bodies1 def_path body0 body1 =
    let projection_clauses1, clauses1 = List.partition (function Projection _ -> true | _ -> false) clauses1 in
    if List.length projection_clauses0 <> List.length projection_clauses1 then failwith "The two functions have a different number of projection clauses";
    List.iter2 (fun clause0 clause1 -> check_clause_refines_clause root_genv0 clause0 root_genv1 clause1) projection_clauses0 projection_clauses1;
@@ -347,7 +401,7 @@ index 77c3c28..32fc587 100644
    let inputs0 = body0.inputs in
    let inputs1 = body1.inputs in
 diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
-index 9e81d09..671416a 100644
+index 9e81d09..6ae08be 100644
 --- a/src/rust_frontend/vf_mir/vf_mir.capnp
 +++ b/src/rust_frontend/vf_mir/vf_mir.capnp
 @@ -279,6 +279,17 @@ struct AdtDef {
@@ -393,7 +447,16 @@ index 9e81d09..671416a 100644
      }
  }
  
-@@ -888,6 +905,9 @@ struct Trait {
+@@ -872,6 +889,8 @@ struct Body {
+     isTraitFn @12: Bool;
+     isDropFn @13: Bool; # Implements std::ops::Drop::drop
+     visibility @22: Visibility;
++    isInherentImplFn @26: Bool; # Defined in an inherent impl block
++    inherentImplSelfTy @27: Ty; # The impl block's self type, if isInherentImplFn
+ }
+ 
+ struct Trait {
+@@ -888,6 +907,9 @@ struct Trait {
  
      name @0: Text;
      requiredFns @1: IndList(RequiredFn);
@@ -404,7 +467,7 @@ index 9e81d09..671416a 100644
  
  struct TyAlias {
 diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
-index 9621ba9..610188c 100644
+index 9621ba9..d23d038 100644
 --- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
 +++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
 @@ -786,6 +786,36 @@ use rustc_span::RemapPathScopeComponents;
@@ -588,7 +651,20 @@ index 9621ba9..610188c 100644
                  _ => clause_cpn.set_ignored(()),
              }
          }
-@@ -1826,9 +1943,19 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1325,6 +1442,12 @@ use rustc_span::RemapPathScopeComponents;
+                         Self::encode_generic_param_def(generic_param, generic_param_cpn);
+                     },
+                 );
++                // Lets ghost code in inherent impls refer to the impl's self type as Self.
++                if tcx.impl_opt_trait_id(impl_did).is_none() {
++                    body_cpn.set_is_inherent_impl_fn(true);
++                    let self_ty = tcx.type_of(impl_did).instantiate_identity().skip_normalization();
++                    Self::encode_ty(tcx, enc_ctx, self_ty, body_cpn.reborrow().init_inherent_impl_self_ty());
++                }
+ 
+                 let impl_clauses = tcx.clauses_of(impl_did).clauses;
+                 body_cpn.fill_impl_block_clauses(impl_clauses, |clause_cpn, clause| {
+@@ -1826,9 +1949,27 @@ use rustc_span::RemapPathScopeComponents;
                      Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
                  }
                  ty::TyKind::Foreign(_) => ty_kind_cpn.set_foreign(()),
@@ -598,8 +674,16 @@ index 9621ba9..610188c 100644
 +                ty::TyKind::RawPtr(pointee, mutability) => {
 +                    use rustc_middle::ty::TypeVisitableExt;
 +                    let mut raw_ptr_ty_cpn = ty_kind_cpn.init_raw_ptr();
-+                    if !ty.has_param() && !ty.has_aliases() && !ty.has_escaping_bound_vars() {
-+                        let env = ty::TypingEnv::fully_monomorphized();
++                    // A pointer to a generic pointee is thin if rustc can lay it out in the
++                    // enclosing function's typing environment, e.g. *mut T with T: Sized.
++                    let env = if !ty.has_param() {
++                        Some(ty::TypingEnv::fully_monomorphized())
++                    } else if let EncKind::Body(body) = enc_ctx.mode {
++                        Some(ty::TypingEnv::post_analysis(tcx, body.source.def_id()))
++                    } else {
++                        None
++                    };
++                    if let (Some(env), false, false) = (env, ty.has_aliases(), ty.has_escaping_bound_vars()) {
 +                        if let Ok(layout) = tcx.layout_of(env.as_query_input(ty)) {
 +                            raw_ptr_ty_cpn.set_is_thin(
 +                                matches!(layout.backend_repr, rustc_abi::BackendRepr::Scalar(_))
@@ -625,10 +709,49 @@ index e0fcd7c..4c5ca4f 100644
      in_fn_body: bool,
      pub kind: GhostRangeKind,
 diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-index 4e237a6..7623de3 100644
+index 4e237a6..14e676d 100644
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,140 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -484,9 +484,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+     let annot : Mir.annot = { span; raw } in
+     Ok annot
+ 
++  (* In a function of an inherent impl block, the name that stands for Self in
++     ghost code, applied to the impl's generic parameters. *)
++  let self_type_alias : string option ref = ref None
++
++  (* Replaces each occurrence of the identifier Self in [raw] with [alias]. *)
++  let replace_self_ident alias raw =
++    let is_ident_char c =
++      match c with 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false
++    in
++    let n = String.length raw in
++    let buf = Buffer.create n in
++    let rec iter i =
++      if i >= n then ()
++      else if i + 4 <= n && String.sub raw i 4 = "Self"
++              && (i = 0 || not (is_ident_char raw.[i - 1]))
++              && (i + 4 = n || not (is_ident_char raw.[i + 4])) then begin
++        Buffer.add_string buf alias;
++        iter (i + 4)
++      end else begin
++        Buffer.add_char buf raw.[i];
++        iter (i + 1)
++      end
++    in
++    iter 0;
++    Buffer.contents buf
++
+   let translate_annot_to_vf_parser_inp ({ span; raw } : Mir.annot) =
+     let spos, epos = Ast.lexed_loc span in
+-    (spos, raw)
++    match !self_type_alias with
++    | None -> (spos, raw)
++    | Some alias -> (spos, replace_self_ident alias raw)
+ 
+   let translate_contract (contract_cpn : ContractRd.t) =
+     let open ContractRd in
+@@ -1456,6 +1484,140 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
@@ -769,7 +892,7 @@ index 4e237a6..7623de3 100644
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2520,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -2386,17 +2548,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -797,7 +920,7 @@ index 4e237a6..7623de3 100644
            in
            let* substs =
              ListAux.try_map
-@@ -4801,7 +4935,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -4801,7 +4963,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                      (TraitRd.RequiredFn.contract_get required_fn_cpn)))
        else required_fns
      in
@@ -830,7 +953,7 @@ index 4e237a6..7623de3 100644
  
    let decode_clause (clause_cpn : D.clause) =
      match clause_cpn with
-@@ -6267,6 +6425,28 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -6267,6 +6453,28 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
              let [ variant_def_no_zst ] = variants_no_zst in
              let fds_no_zst = variant_def_no_zst.fields in
              let field_defs_no_zst = List.map translate_to_vf_field_def fds_no_zst in
@@ -859,7 +982,7 @@ index 4e237a6..7623de3 100644
              let struct_decl =
                Ast.Struct
                  ( def_loc,
-@@ -6278,7 +6458,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -6278,7 +6486,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -878,7 +1001,7 @@ index 4e237a6..7623de3 100644
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7826,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -7636,8 +7854,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -889,6 +1012,114 @@ index 4e237a6..7623de3 100644
          if mut1 = mut2 then match_types env ty1 ty2 else None
      | _ -> None
  
+@@ -8109,12 +8327,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+       let body_tr_defs_ctx =
+         { adt_defs; directives = vf_mir_translator_directives; fn_specializer }
+       in
++      (* Ghost code in an inherent impl refers to the impl's self type as Self. Each
++         such function gets a type alias for it, generic over the impl's parameters. *)
++      let self_alias_decls = ref [] in
+       let* bodies_tr_res =
+         Rocq_writer.rocq_print Args.rocq_writer "Definition bodies := ";
+         Rocq_writer.rocq_print_big_list Args.rocq_writer @@ fun () ->
+-        bodies_cpn |> ListAux.try_map @@ fun body_cpn ->
++        bodies_cpn |> List.mapi (fun i body_cpn -> (i, body_cpn)) |> ListAux.try_map @@ fun (i, body_cpn) ->
+           Rocq_writer.rocq_print_big_list_element Args.rocq_writer @@ fun () ->
+-          translate_body body_tr_defs_ctx body_cpn
++          let* () =
++            if BodyRd.is_inherent_impl_fn_get body_cpn then begin
++              let* loc = translate_span_data (BodyRd.fn_sig_span_get body_cpn) in
++              let* self_ty = translate_ty (BodyRd.inherent_impl_self_ty_get body_cpn) loc in
++              let impl_params =
++                BodyRd.impl_block_generics_get_list body_cpn
++                |> List.map translate_generic_param_def |> List.map fst
++              in
++              let alias = Printf.sprintf "Self__%d" i in
++              let module_path = BodyRd.module_def_path_get body_cpn in
++              let full_name = if module_path = "" then alias else module_path ^ "::" ^ alias in
++              self_alias_decls := Ast.TypedefDecl (loc, self_ty.vf_ty, full_name, impl_params) :: !self_alias_decls;
++              self_type_alias :=
++                Some (if impl_params = [] then alias else alias ^ "<" ^ String.concat ", " impl_params ^ ">");
++              Ok ()
++            end else begin
++              self_type_alias := None;
++              Ok ()
++            end
++          in
++          let result = translate_body body_tr_defs_ctx body_cpn in
++          self_type_alias := None;
++          result
+       in
+       Rocq_writer.rocq_print Args.rocq_writer ".\n";
+       let body_sig_opts, body_decls, debug_infos =
+@@ -8138,7 +8381,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+       let decls =
+         List.map
+           (modularize_decl module_imports_map)
+-          (ty_alias_decls @ traits_decls @ trait_impl_prototypes @ adt_decls @ aux_decls
++          (ty_alias_decls @ !self_alias_decls @ traits_decls @ trait_impl_prototypes @ adt_decls @ aux_decls
+          @ adts_full_bor_content_preds @ adts_proof_obligs)
+         @ ghost_decls
+         @ List.map
+diff --git a/src/verifast.ml b/src/verifast.ml
+index 2b64679..51fd11b 100644
+--- a/src/verifast.ml
++++ b/src/verifast.ml
+@@ -1399,7 +1399,10 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+             end
+           | Some (PredCtorInfo (lp, predctor_tparams, ps1, ps2, inputParamCount, body, funcsym)) ->
+             reportUseSite DeclKind_Predicate lp l;
++            (* Without explicit type arguments, they are inferred from the constructor arguments. *)
++            let infer_targs = targs = [] && predctor_tparams <> [] in
+             let tpenv =
++              if infer_targs then List.map (fun x -> (x, InferredType (object end, ref Unconstrained))) predctor_tparams else
+               match zip predctor_tparams targs with
+                 Some bs -> bs
+               | None -> static_error l "Incorrect number of type arguments" None
+@@ -1417,6 +1420,14 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+                 | _ -> static_error l "Predicate constructor arguments must be expressions." None
+                 end
+             in
++            let tpenv =
++              if not infer_targs then tpenv else
++              tpenv |> List.map begin fun (x, tp) ->
++                match unfold_inferred_type tp with
++                  InferredType _ -> static_error l ("Cannot infer type argument " ^ x ^ " of this predicate constructor; please supply the type arguments.") None
++                | tp -> (x, tp)
++              end
++            in
+             let targs_typeids = List.map (fun (x, tp) -> (x ^ "_typeid", typeid_of_core l env tp)) tpenv in
+             let g_symb = mk_app funcsym (List.map snd targs_typeids @ List.map (fun (x, t) -> t) bs0) in
+             let ps2 = List.map (fun (x, t) -> (x, t, instantiate_type tpenv t)) ps2 in
+@@ -1751,9 +1762,12 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+               end
+             | Some (PredCtorInfo (lpred, predctor_tparams, ps1, ps2, inputParamCount, body, funcsym)) ->
+               reportUseSite DeclKind_Predicate lpred l;
++              (* Without explicit type arguments, they are inferred from the constructor arguments. *)
++              let infer_targs = targs = [] && predctor_tparams <> [] in
+               let tpenv =
++                if infer_targs then List.map (fun x -> (x, InferredType (object end, ref Unconstrained))) predctor_tparams else
+                 match zip predctor_tparams targs with
+-                  Some tpenv -> tpenv
++                  Some bs -> bs
+                 | None -> static_error l "Incorrect number of type arguments" None
+               in
+               let bs0 =
+@@ -1769,6 +1783,14 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+                   | _ -> static_error l "Predicate constructor arguments must be expressions." None
+                   end
+               in
++              let tpenv =
++                if not infer_targs then tpenv else
++                tpenv |> List.map begin fun (x, tp) ->
++                  match unfold_inferred_type tp with
++                    InferredType _ -> static_error l ("Cannot infer type argument " ^ x ^ " of this predicate constructor; please supply the type arguments.") None
++                  | tp -> (x, tp)
++                end
++              in
+               let targs_typeids = List.map (fun (x, tp) -> (x ^ "_typeid", typeid_of_core l env tp)) tpenv in
+               let g_symb = mk_app funcsym (List.map snd targs_typeids @ List.map (fun (x, t) -> t) bs0) in
+               (lpred, [], tpenv, ps2, targs_typeids @ bs0, (g_symb, false), body, [], inputParamCount)
 diff --git a/src/verifast1.ml b/src/verifast1.ml
 index e0bff63..e5f699e 100644
 --- a/src/verifast1.ml
@@ -1106,12 +1337,45 @@ index 0000000..9bf4b33
 +@*/
 +
 +fn main() {}
+diff --git a/tests/rust/pred_ctor_infer_targs.rs b/tests/rust/pred_ctor_infer_targs.rs
+new file mode 100644
+index 0000000..558618a
+--- /dev/null
++++ b/tests/rust/pred_ctor_infer_targs.rs
+@@ -0,0 +1,27 @@
++// The type arguments of a generic predicate constructor are inferred from its
++// arguments in open and close statements.
++/*@
++
++pred_ctor holds<T>(p: *T)() = *p |-> ?v;
++
++pred_ctor holds_any<T>(n: i32)() = true;
++
++lem roundtrip(p: *u16)
++    req *p |-> ?v;
++    ens *p |-> _;
++{
++    close holds(p)();
++    open holds(p)();
++}
++
++lem not_inferable()
++    req true;
++    ens true;
++{
++    close holds_any(0)(); //~should_fail
++    leak holds_any::<u8>(0)();
++}
++
++@*/
++
++fn main() {}
 diff --git a/tests/rust/purely_unsafe/atomic_intrinsics.rs b/tests/rust/purely_unsafe/atomic_intrinsics.rs
 new file mode 100644
-index 0000000..786dee7
+index 0000000..e84347d
 --- /dev/null
 +++ b/tests/rust/purely_unsafe/atomic_intrinsics.rs
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,42 @@
 +// Atomic intrinsics with const-generic orderings, for concrete and generic operands.
 +#![feature(core_intrinsics)]
 +#![allow(internal_features)]
@@ -1138,6 +1402,14 @@ index 0000000..786dee7
 +    unsafe { intrinsics::atomic_xchg::<T, { AO::AcqRel }>(p, v) }
 +}
 +
++// The pointee is generic but Sized, so the pointer operand is thin.
++unsafe fn swap_ptr<T>(p: *mut *mut T, v: *mut T) -> *mut T
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_xchg::<*mut T, { AO::AcqRel }>(p, v) }
++}
++
 +unsafe fn store_read_only(p: *mut u16)
 +//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_) &*& perm != 1 &*& inv_(0) == true;
 +//@ ens true;
@@ -1162,6 +1434,25 @@ index 0000000..58ee012
 +//@ ens [f]std::intrinsics::atomic_points_to(p, perm, inv_);
 +{
 +    unsafe { intrinsics::atomic_load::<u8, { AO::Release }, false>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/purely_unsafe/atomic_intrinsics_wide_ptr.rs b/tests/rust/purely_unsafe/atomic_intrinsics_wide_ptr.rs
+new file mode 100644
+index 0000000..8bebb16
+--- /dev/null
++++ b/tests/rust/purely_unsafe/atomic_intrinsics_wide_ptr.rs
+@@ -0,0 +1,13 @@
++// A wide pointer operand is rejected, also when its pointee is generic.
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++unsafe fn swap_wide<T: ?Sized>(p: *mut *mut T, v: *mut T) -> *mut T
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_);
++{
++    unsafe { intrinsics::atomic_xchg::<*mut T, { AO::AcqRel }>(p, v) }
 +}
 +
 +fn main() {}
@@ -1229,11 +1520,67 @@ index ec62e86..2dd73ad 100644
    !refinement-checker basic_orig.rs basic_verified_bad1.rs
    !refinement-checker basic_orig.rs basic_verified_bad2.rs
    refinement-checker loop_orig.rs loop_verified.rs
+diff --git a/tests/rust/self_in_ghost.rs b/tests/rust/self_in_ghost.rs
+new file mode 100644
+index 0000000..2c50299
+--- /dev/null
++++ b/tests/rust/self_in_ghost.rs
+@@ -0,0 +1,50 @@
++// Ghost code in an inherent impl can refer to the impl's self type as Self.
++pub struct Wrap<T> {
++    x: T,
++}
++
++impl Wrap<u16> {
++    pub fn size() -> usize
++    //@ req true;
++    //@ ens result == std::mem::size_of::<Self>();
++    {
++        std::mem::size_of::<Wrap<u16>>()
++    }
++}
++
++impl<T> Wrap<T> {
++    pub fn identity(p: *mut Wrap<T>) -> *mut Wrap<T>
++    //@ req true;
++    //@ ens result == p as *Self;
++    {
++        p
++    }
++}
++
++// In a macro, Self is the only way for ghost code to name each expansion's type.
++macro_rules! sized {
++    ($t:ty) => {
++        impl Wrap<$t> {
++            pub fn size_of_self() -> usize
++            //@ req true;
++            //@ ens result == std::mem::size_of::<Self>();
++            {
++                std::mem::size_of::<Wrap<$t>>()
++            }
++        }
++    };
++}
++
++sized!(u8);
++sized!(u64);
++
++impl Wrap<u32> {
++    pub fn wrong_size() -> usize
++    //@ req true;
++    //@ ens result == std::mem::size_of::<Self>(); //~should_fail
++    {
++        std::mem::size_of::<Wrap<u8>>()
++    }
++}
++
++fn main() {}
 diff --git a/tests/rust/testsuite.mysh b/tests/rust/testsuite.mysh
-index 3c5ed1d..4f927c2 100644
+index 3c5ed1d..1d3f379 100644
 --- a/tests/rust/testsuite.mysh
 +++ b/tests/rust/testsuite.mysh
-@@ -17,6 +17,10 @@ verifast -allow_should_fail -allow_dead_code assume_stmt.rs
+@@ -17,6 +17,12 @@ verifast -allow_should_fail -allow_dead_code assume_stmt.rs
  verifast hidden_locals.rs
  verifast -allow_should_fail -allow_dead_code this_pred.rs
  verifast use_decls_in_modules.rs
@@ -1241,15 +1588,18 @@ index 3c5ed1d..4f927c2 100644
 +verifast -allow_should_fail -allow_assume -allow_dead_code pred_ctor_generic_args.rs
 +verifast -allow_should_fail macro_fn_specs.rs
 +verifast -allow_should_fail -allow_dead_code instance_alignment.rs
++verifast -allow_should_fail self_in_ghost.rs
++verifast -allow_should_fail -allow_dead_code pred_ctor_infer_targs.rs
  begin_sequential
  cd unverified
    cd platform
-@@ -33,6 +37,8 @@ popd
+@@ -33,6 +39,9 @@ popd
  verifast -ignore_ref_creation -allow_assume nonnull.rs
  verifast -skip_specless_fns nonnull_into.rs
  cd purely_unsafe
 +  verifast -allow_should_fail -allow_dead_code atomic_intrinsics.rs
 +  !verifast atomic_intrinsics_bad_ordering.rs
++  !verifast atomic_intrinsics_wide_ptr.rs
    verifast enum_discr.rs
    verifast -ignore_unwind_paths leftpad.rs
    verifast arrays.rs
