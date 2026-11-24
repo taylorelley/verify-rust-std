@@ -12,7 +12,7 @@ The text below can be adapted as the description of a pull request to
 
 ---
 
-## Support for const-generic atomic intrinsics
+## Support for `core::sync::atomic` on current nightlies
 
 Recent nightlies declare the atomic intrinsics with the ordering as a const
 generic, as in `atomic_load::<T, ORD, VOLATILE>`, and no longer as one
@@ -40,6 +40,29 @@ on these calls. That blocks `core::sync::atomic` and every client of it.
   `RustcAbiAlignment` struct attribute. A proof can then derive the alignment
   of a wrapper such as `AtomicU16` from the compiler without assuming it.
 
+### Associated-type projections
+
+`Atomic<T: AtomicPrimitive>` stores `UnsafeCell<T::Storage>`, so VeriFast 26.10
+stops on the whole module with `sizedness_of_type: TODO: projection types`.
+
+* For each local trait without generic parameters, the exporter sends the
+  associated types whose item bounds include `Sized` (`sizedAssocTypes` in
+  `vf_mir.capnp`). Associated types with their own generics are left out.
+* The translator declares `Trait::Assoc_typeid` for them, as `rust_parser.ml`
+  already does for `type Assoc;` in `.rsspec` traits.
+* `sizedness_of_type` treats a projection as sized exactly when that typeid
+  function is declared. `?Sized` associated types still fail.
+
+### Refinement checker
+
+* The exporter encodes `ConstArgHasType` clauses (the type of a const generic
+  parameter, such as `const VOLATILE: bool`) instead of marking them ignored.
+  The checker compares both the constant and the type.
+* Value trees with branches, such as the `AtomicOrdering` enum arguments, decode
+  to a structural constant that is compared by value. Changing
+  `{ AO::Relaxed }` to `{ AO::SeqCst }` in the verified copy is reported.
+* The checker's synthetic raw-pointer types set the new `is_thin` field.
+
 ### Specifications (`bin/rust/std/lib.rsspec`)
 
 * The patch adds `atomic_align_of` facts for every integer width and for thin
@@ -57,7 +80,9 @@ on these calls. That blocks `core::sync::atomic` and every client of it.
 
 ### Testing
 
-The `verify-rust-std` Challenge 7 replay exercises every path. It checks the
-constructors and public methods of each atomic type, the generic helpers,
-and negative controls for each rejected shape and ordering. The upstream
+The `verify-rust-std` Challenge 7 replay exercises every path. It verifies
+and refinement-checks the full `atomic.rs` module, checks the constructors and
+public methods of each atomic type, and runs negative controls for each rejected
+shape and ordering. A minimal `?Sized` associated-type example still fails as
+before. The upstream
 VeriFast test suite should also run with the patch applied before it merges.

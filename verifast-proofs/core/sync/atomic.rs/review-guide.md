@@ -9,7 +9,8 @@ proof logs, compiler IR, negative controls and runtime test results.
 
 | Challenge property | Where to start | What to check |
 | --- | --- | --- |
-| Generic helper contracts | `generic-helpers/coverage.json`, `generic-helpers.rs` and its controls | The 15 bodies match `atomic.rs` exactly, apart from attributes. Each contract requires the slot permission the operation needs, and the no-panic run excludes exactly the orderings that panic. |
+| Part 2 helper contracts | `verified/atomic.rs`, `verify.sh` and the `library-module` log | `diff original/atomic.rs verified/atomic.rs` shows only the contracts. Each contract requires the slot permission the operation needs. |
+| Optional panic contracts | `generic-helpers/coverage.json` and `generic-helpers-no-panic.rs` | The no-panic run excludes exactly the orderings that panic. |
 | Live, aligned access | `constructors/coverage.json` and the constructor layout and alignment controls | The constructor obtains permission for the same slot address at the target's required alignment and retains it for the lifetime of the reference. |
 | Initialized storage | Constructor `uninitialized` controls and the Boolean and pointer missing-storage controls | A fresh conversion needs a live, initialized points-to resource. A reused conversion needs an existing share. |
 | Conflicting accesses | Boolean mixed-access and scoped-reference proofs, the two U16 overlap controls, and the integer fractional-write controls | A read can use fractional byte ownership. A write requires full underlying byte permission. Scope recovery requires the lifetime to end. |
@@ -58,6 +59,21 @@ scope on these targets.
    results, such as the arithmetic result or strong versus weak
    compare-exchange, have native and Miri evidence. The proof makes no claim
    about synchronization or about the pointer values stored in an `AtomicPtr`.
+
+## Comparison with the merged VeriFast solutions
+
+The Challenge 5 (`LinkedList`) and Challenge 19 (`RawVec`) proofs set the
+conventions this proof follows.
+
+| | Challenges 5 and 19 | Challenge 7 |
+| --- | --- | --- |
+| Layout | `original/`, `verified/`, `verify.sh`, `update.sh` | The same, for the Part 2 helpers. The constructors and public wrappers use specialized copies with compiled MIR and LLVM comparison. |
+| Link to `library/` | `refinement-checker` and `diff` | `refinement-checker`, and `diff` after the diagnostic-item attribute rewrite |
+| Source changes in `verified/` | Small rewrites to place ghost commands, refinement-checked | None. Only contracts are added. |
+| VeriFast flags | `-skip_specless_fns`, with `-ignore_unwind_paths` and `-allow_assume` for Challenge 5 | `-skip_specless_fns` only. Unwind paths are verified and no `assume` is used. |
+| Targets | Linux x86-64 | Linux x86-64, plus AArch64 Linux for the 128-bit types, with Miri on both |
+| Trusted specs | VeriFast's library specs, reviewed in verifast/verifast#863 | The same library, plus the atomic primitive contracts added by the patch |
+| VeriFast version | A released version | 26.10 with a patch, until a release includes it (`verifast-upstream.md`) |
 
 ## Review status
 

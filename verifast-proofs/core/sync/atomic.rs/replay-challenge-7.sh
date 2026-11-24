@@ -41,6 +41,8 @@ prove() {
         python3 "$proof_dir/$script.py" "$runtime" "$rustc_path" "$logs/$name" "$@"
 }
 
+# The proof of the library module itself, in the layout of the other VeriFast proofs.
+run library-module env RUSTUP_TOOLCHAIN="$verifier_nightly" PATH="$runtime:$PATH" bash "$proof_dir/verify.sh"
 prove constructors check-from-ptr
 prove generic-helpers check-generic-helpers
 prove bool-access check-bool-store

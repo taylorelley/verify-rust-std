@@ -10,7 +10,7 @@ for Linux x86-64, and for AArch64 Linux in the 128-bit cases.
 | Challenge 7 item | Proof step | Evidence |
 | --- | --- | --- |
 | Part 1: the 12 `from_ptr` constructors | `constructors` | Each constructor needs a live, initialized slot with the atomic alignment of its type, and holds it for the reference lifetime. All slot values are symbolic. `AtomicPtr` uses pointee sizes 0, 1, 2, 3 and 4 with an unrestricted pointer value. |
-| Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `generic-helpers` | The generic bodies are copied verbatim from the library at replay time and verified against one contract per helper. |
+| Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `library-module` and `generic-helpers` | Each helper carries one generic contract and is verified inside the full library module. `refinement-checker` and `diff` tie the module to `library/`, as in the Challenge 5 and 19 proofs. |
 | Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The public wrappers unwind on invalid orderings with every resource intact. |
 | Part 3: intrinsic contracts | `verifast-26.10-u8-store.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
 | Public methods and instantiations | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | Every public wrapper on `AtomicBool`, all integer widths and `AtomicPtr` at five pointee sizes, connected to the library by compiled MIR and LLVM comparison. |
@@ -42,10 +42,10 @@ The listed undefined behaviors are excluded as follows:
    to VeriFast 26.10 and to the current master. Once a VeriFast release includes
    it, the repository's pinned release can replace it. See
    [`verifast-upstream.md`](verifast-upstream.md).
-3. The per-type wrapper proofs: a specialized copy of each public wrapper is
-   verified, then compared with the compiled library code by the replay
-   scripts. The generic helper proof uses the library text directly and needs
-   no comparison.
+3. The per-type proofs of the constructors and public wrappers: a specialized
+   copy of each is verified, then compared with the compiled library code by the
+   replay scripts. The Part 2 helpers need no such comparison, since they are
+   verified in the library module itself.
 
 [`review-guide.md`](review-guide.md) maps each claim to its evidence and lists
 the checks a reviewer should repeat.
@@ -91,7 +91,32 @@ The `scoped-thread-boundary`, `scoped-counter` and `scoped-composition`
 steps check the threaded test clients. They are not part of the Challenge 7
 claim. See [`supplementary-scoped-threads.md`](supplementary-scoped-threads.md).
 
+## Library module proof
+
+`original/` holds the library's `atomic.rs` and `verified/` holds the same file
+with VeriFast contracts on the 15 unsafe helpers. In both copies the four
+`#[rustc_diagnostic_item]` attributes become doc attributes, because the proof
+crate cannot redefine core's diagnostic items. `verify.sh` follows the Challenge 5
+and Challenge 19 proofs. It runs VeriFast on the whole of `verified/`, runs
+`refinement-checker` to show that `original/` refines `verified/`, and diffs
+`original/` against `library/` with the same attribute rewrite. After a
+toolchain update, run `update.sh` to merge the library changes into
+`verified/`.
+
+```sh
+PATH=/tmp/challenge-7-verifast-build/verifast-26.10/bin:$PATH \
+  RUSTUP_TOOLCHAIN=nightly-2026-09-25 bash "$proof/verify.sh"
+```
+
+VeriFast runs with `-skip_specless_fns` only. It verifies unwind paths and
+allows no `assume` statements.
+
 ## Generic unsafe helpers
+
+`check-generic-helpers.py` checks the same contracts in a second way. It
+extracts the helpers from the library at replay time, checks that
+`verified/atomic.rs` states identical contracts, and runs the optional
+no-panic variant and the rejection controls.
 
 ```sh
 rustc_path=$(rustup which rustc)
@@ -126,6 +151,9 @@ The rejection controls cover a store with only a read fraction, a store,
 exchange or maximum with an invalid value, a store with no permission,
 addition on a restricted slot, the unwinding paths when the ordering contract
 is missing, and a Release load or Acquire store substituted into a helper body.
+Two controls run on the full module: `refinement-checker` rejects a changed
+exchange ordering in `verified/`, and VeriFast rejects a store contract that
+has only read access.
 
 For `VOLATILE` the generic contract is the ordinary-access contract. It is at
 least as strong as what a volatile access requires. AtomicBool's AND, OR and XOR
@@ -148,19 +176,20 @@ both Boolean inputs, the valid load and store orderings, ordinary access after
 join, concurrent ordinary and atomic reads, and the invalid load and store orderings.
 This is concrete test evidence.
 
-For the VeriFast 26.10 front-end probe, use the verifier's nightly
-`nightly-2026-09-25` with `rustc-dev` and `rust-src`:
+`probe-verifast.py` runs the frontend on a minimal associated-type example and on
+the unannotated module:
 
 ```sh
 RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
-  python3 "$proof/probe-verifast.py" /path/to/verifast-26.10/bin /tmp/challenge-7-logs
+  python3 "$proof/probe-verifast.py" /path/to/patched/verifast-26.10/bin /tmp/challenge-7-logs
 ```
 
-On Linux x86-64, VeriFast processes the concrete-layout control and the refinement
-checker passes the current module's self-comparison. Both the full current module
-and the minimal associated-type example fail before proof with
-`sizedness_of_type: TODO: projection types`. The compiler has accepted the source
-by this stage. The identity refinement check is a tool sanity check.
+Unpatched VeriFast 26.10 stops on both with `sizedness_of_type: TODO: projection
+types`, because `Atomic<T>` stores `T::Storage`. The patch treats a projection
+as sized only when the trait declares the associated type `Sized`, explicitly or
+implicitly. A `?Sized` associated type is still rejected. The patch also declares
+the typeid function of such a projection, as VeriFast already does for traits in
+`.rsspec` files.
 
 ## Specialized Boolean constructor
 

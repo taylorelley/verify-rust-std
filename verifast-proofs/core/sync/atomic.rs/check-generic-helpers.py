@@ -12,7 +12,9 @@ import argparse
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import tempfile
 
 HELPERS = (
     "atomic_store", "atomic_load", "atomic_swap", "atomic_add", "atomic_sub",
@@ -147,6 +149,13 @@ def main():
 
     # The extracted bodies must still compile as Rust before VeriFast sees them.
     proof = proof_text(source, CONTRACTS)
+    # verify.sh checks the same contracts inside the full module.
+    verified = (here / "verified/atomic.rs").read_text()
+    for name in HELPERS:
+        signature, body = extract(source, name)
+        contract = proof.split(signature, 1)[1].split(body, 1)[0]
+        if signature + contract + body not in verified:
+            raise SystemExit(f"verified/atomic.rs states a different contract for {name}")
     subprocess.run([args.rustc.resolve(), *flags.split(), "--emit=metadata",
                     "-o", logs / "generic-helpers.rmeta", "-"], input=proof, text=True, check=True)
     expect_pass("generic-helpers", proof)
@@ -215,10 +224,66 @@ def main():
     for name, text, diagnostic in controls:
         expect_fail(name, text, diagnostic)
         results[name] = "rejected"
+    # Controls on the full-module proof run by verify.sh.
+    module_flags = ["--edition=2024 --crate-type=lib"]
+    with tempfile.TemporaryDirectory(prefix="atomic-module-") as directory:
+        work = Path(directory)
+        for side in ("original", "verified"):
+            shutil.copytree(here / side, work / side)
+        target = work / "verified/atomic.rs"
+        module = target.read_text()
+
+        def module_control(name, old, new, command, diagnostic):
+            if module.count(old) != 1:
+                raise SystemExit(f"Expected one occurrence of {old!r}")
+            target.write_text(module.replace(old, new))
+            result = subprocess.run(command, capture_output=True, text=True, cwd=work)
+            output = result.stdout + result.stderr
+            (logs / f"{name}.log").write_text(output)
+            target.write_text(module)
+            if not result.returncode or diagnostic not in output:
+                raise SystemExit(f"Expected {name} to fail with {diagnostic!r}. See {name}.log")
+            results[name] = "rejected"
+
+        module_control(
+            "module-refinement-changed-ordering",
+            "Relaxed => intrinsics::atomic_xchg::<T, { AO::Relaxed }>(dst, val),",
+            "Relaxed => intrinsics::atomic_xchg::<T, { AO::SeqCst }>(dst, val),",
+            [args.verifast_bin.resolve() / "refinement-checker", "--rustc-args", *module_flags,
+             "original/lib.rs", "verified/lib.rs"],
+            "atomic_xchg")
+        store_contract = f"[?f]std::intrinsics::atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;\n//@ ens thread_token(currentThread) &*& {KEEP};\n//@ on_unwind_ens thread_token(currentThread) &*& {KEEP};"
+        module_control(
+            "module-store-read-fraction",
+            store_contract,
+            store_contract.replace("(dst, 1, ?valid)", "(dst, ?p, ?valid)").replace("(dst, 1, valid)", "(dst, p, valid)"),
+            [*verifier, "verified/lib.rs"],
+            "No matching heap chunks: [_]std::intrinsics::atomic_points_to<T>(dst, 1, _)")
+
+    # The patch treats a projection as sized only for a Sized associated type.
+    projection = (here / "projection.rs").read_text()
+    for name, old, new, expected in (
+        ("projection-implicit-sized", "type Storage: Sized;", "type Storage;", None),
+        ("projection-unsized", "type Storage: Sized;\n}\n\n#[repr(C)]\npub struct Atomic<T: AtomicPrimitive> {\n    v: UnsafeCell<T::Storage>,",
+         "type Storage: ?Sized;\n}\n\n#[repr(C)]\npub struct Atomic<T: AtomicPrimitive> {\n    n: u8,\n    v: T::Storage,",
+         "sizedness_of_type: TODO: projection types"),
+    ):
+        if projection.count(old) != 1:
+            raise SystemExit(f"Unexpected projection.rs for {name}")
+        status, output = verify(name, projection.replace(old, new))
+        if expected is None:
+            if status or "0 errors found" not in output:
+                raise SystemExit(f"Expected {name} to verify. See {name}.log")
+            results[name] = "accepted"
+        else:
+            if not status or expected not in output:
+                raise SystemExit(f"Expected {name} to fail with {expected!r}. See {name}.log")
+            results[name] = "rejected"
+
     (logs / "coverage.json").write_text(json.dumps({
         "helpers": list(HELPERS), "no_panic_contracts": list(NO_PANIC), "controls": results,
     }, indent=2) + "\n")
-    print(f"All {len(controls)} generic-helper rejection controls passed.")
+    print(f"All {len(results)} generic-helper, module and projection controls passed.")
 
 
 if __name__ == "__main__":

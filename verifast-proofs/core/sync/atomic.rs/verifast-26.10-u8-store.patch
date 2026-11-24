@@ -228,8 +228,124 @@ index 959ce64..23902e1 100644
  and of_constant_value = function
    IntConst n -> C ("IntConst", [BigInt n])
  | BoolConst b -> C ("BoolConst", [B b])
+diff --git a/src/refinement_checker/refinement_checker.ml b/src/refinement_checker/refinement_checker.ml
+index 77c3c28..32fc587 100644
+--- a/src/refinement_checker/refinement_checker.ml
++++ b/src/refinement_checker/refinement_checker.ml
+@@ -105,6 +105,7 @@ type literal_const_expr =
+ and const_expr =
+   ParamConstExpr of string
+ | LiteralConstExpr of literal_const_expr
++| BranchConstExpr of ty * const_expr list (* An ADT, tuple or array value, such as an enum variant *)
+ and ty =
+   Bool
+ | Int of int_width
+@@ -145,9 +146,10 @@ let string_of_literal_const_expr = function
+ | USizeValue (size, i) -> Printf.sprintf "USizeValue %d %s" size (Stdint.Uint64.to_string i)
+ | CharValue i -> Printf.sprintf "CharValue %s" (Stdint.Uint32.to_string i)
+ 
+-let string_of_const_expr = function
++let rec string_of_const_expr = function
+   ParamConstExpr param -> Printf.sprintf "ParamConstExpr %s" param
+ | LiteralConstExpr literal -> string_of_literal_const_expr literal
++| BranchConstExpr (_, elems) -> Printf.sprintf "BranchConstExpr [%s]" (String.concat "; " (List.map string_of_const_expr elems))
+ 
+ let rec string_of_ty = function
+   Bool -> "Bool"
+@@ -297,7 +299,7 @@ and decode_const_expr genv const_cpn =
+     let valtree = value_cpn.val_tree in
+     match valtree with
+       Leaf scalar_int_cpn -> LiteralConstExpr (decode_scalar_int ty scalar_int_cpn)
+-    | Branch _ -> failwith "Branch not supported"
++    | Branch elems -> BranchConstExpr (ty, List.map (decode_const_expr genv) elems)
+ 
+ type call_path = basic_block_path option
+ and basic_block_path = {bb_caller: basic_block_path option; bb_index: int}
+@@ -427,10 +429,10 @@ let fns_to_be_inlined: (string * body) list =
+       [
+         {id={name="result"}; ty={kind=Param "T"}; mutability=Not; source_info={span}};
+         {id={name="self"}; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}; {kind=Type {kind=Param "A"}}]}}; mutability=Not; source_info={span}};
+-        {id={name="contents_ptr"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}; mutability=Not; source_info={span}};
++        {id={name="contents_ptr"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}; mutability=Not; source_info={span}};
+         {id={name="ref_self"}; ty={kind=Ref {region={id="'<erased>"}; mutability=Mut; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}; {kind=Type {kind=Param "A"}}]}}}}; mutability=Not; source_info={span}};
+         {id={name="drop_result"}; ty={kind=Tuple []}; mutability=Not; source_info={span}};
+-        {id={name="contents_ptr2"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}; mutability=Not; source_info={span}};
++        {id={name="contents_ptr2"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}; mutability=Not; source_info={span}};
+       ]
+     in
+     let basic_blocks: basic_block list =
+@@ -451,7 +453,7 @@ let fns_to_be_inlined: (string * body) list =
+                     local_is_mutable=false;
+                     kind=Other
+                   };
+-                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}
++                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}
+                 }
+               };
+               source_info={span}
+@@ -481,7 +483,7 @@ let fns_to_be_inlined: (string * body) list =
+                     local_is_mutable=false;
+                     kind=Other
+                   };
+-                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}
++                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}
+                 }
+               };
+               source_info={span}
+@@ -632,7 +634,7 @@ let fns_to_be_inlined: (string * body) list =
+   in
+   let local_decls: local_decl list =
+     [
+-      {id={name="result"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}; mutability=Not; source_info={span}};
++      {id={name="result"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}; mutability=Not; source_info={span}};
+       {id={name="self"}; ty={kind=Ref {region={id="'<erased>"}; mutability=Not; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}}}; mutability=Not; source_info={span}};
+       {id={name="b"}; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}; mutability=Not; source_info={span}};
+     ]
+@@ -667,7 +669,7 @@ let fns_to_be_inlined: (string * body) list =
+                   local_is_mutable=false;
+                   kind=Other
+                 };
+-                ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}
++                ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}
+               }
+             };
+             source_info={span}
+@@ -684,7 +686,7 @@ let fns_to_be_inlined: (string * body) list =
+     def_path="std::boxed::Box::<T, A>::as_ptr";
+     module_def_path="std::boxed";
+     contract={annotations=[]; span};
+-    output={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}};
++    output={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}};
+     inputs=[
+       {kind=Ref {region={id="'<erased>"}; mutability=Not; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}}};
+     ];
+@@ -2257,6 +2259,13 @@ let check_clause_refines_clause genv0 clause0 genv1 clause1 =
+       let generic_args0 = trait_clause0.args in
+       let generic_args1 = trait_clause1.args in
+       if List.map (decode_gen_arg genv0) generic_args0 <> List.map (decode_gen_arg genv1) generic_args1 then failwith "The two trait clauses have different generic arguments"
++  | ConstArgHasType const_arg0, ConstArgHasType const_arg1 ->
++      let arg0 = decode_gen_arg genv0 {kind = Const const_arg0.const} in
++      let arg1 = decode_gen_arg genv1 {kind = Const const_arg1.const} in
++      if arg0 <> arg1 then failwith "The two const argument type clauses have different constants";
++      let ty0 = decode_gen_arg genv0 {kind = Type const_arg0.ty} in
++      let ty1 = decode_gen_arg genv1 {kind = Type const_arg1.ty} in
++      if ty0 <> ty1 then failwith "The two const argument type clauses have different types"
+   | Projection projection_clause0, Projection projection_clause1 ->
+       let proj_term0 = projection_clause0.projection_term in
+       let proj_term1 = projection_clause1.projection_term in
+@@ -2335,6 +2344,10 @@ let check_body_refines_body bodies0 bodies1 def_path body0 body1 =
+   let projection_clauses1, clauses1 = List.partition (function Projection _ -> true | _ -> false) clauses1 in
+   if List.length projection_clauses0 <> List.length projection_clauses1 then failwith "The two functions have a different number of projection clauses";
+   List.iter2 (fun clause0 clause1 -> check_clause_refines_clause root_genv0 clause0 root_genv1 clause1) projection_clauses0 projection_clauses1;
++  let const_arg_clauses0, clauses0 = List.partition (function ConstArgHasType _ -> true | _ -> false) clauses0 in
++  let const_arg_clauses1, clauses1 = List.partition (function ConstArgHasType _ -> true | _ -> false) clauses1 in
++  if List.length const_arg_clauses0 <> List.length const_arg_clauses1 then failwith "The two functions have a different number of const argument type clauses";
++  List.iter2 (fun clause0 clause1 -> check_clause_refines_clause root_genv0 clause0 root_genv1 clause1) const_arg_clauses0 const_arg_clauses1;
+   if clauses0 <> [] || clauses1 <> [] then failwith "Clause kind not supported";
+   let inputs0 = body0.inputs in
+   let inputs1 = body1.inputs in
 diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
-index 9e81d09..9ebb571 100644
+index 9e81d09..f053526 100644
 --- a/src/rust_frontend/vf_mir/vf_mir.capnp
 +++ b/src/rust_frontend/vf_mir/vf_mir.capnp
 @@ -279,6 +279,7 @@ struct AdtDef {
@@ -248,11 +364,75 @@ index 9e81d09..9ebb571 100644
      }
  
      struct RefTy {
+@@ -418,11 +420,16 @@ struct Clause {
+         projectionTerm @0: AliasTerm;
+         term @1: Term; # G
+     }
++    struct ConstArgHasType { # const parameter C has type T
++        const @0: TyConst;
++        ty @1: Ty;
++    }
+     union {
+         outlives @0: Outlives;
+         trait @2: Trait;
+         projection @3: Projection;
+         ignored @1: Void; # A clause that we are ignoring for now
++        constArgHasType @4: ConstArgHasType;
+     }
+ }
+ 
+@@ -888,6 +895,9 @@ struct Trait {
+ 
+     name @0: Text;
+     requiredFns @1: IndList(RequiredFn);
++    # Associated types with a Sized bound and no generics of their own.
++    # Empty if the trait has generic parameters other than Self.
++    sizedAssocTypes @2: List(Text);
+ }
+ 
+ struct TyAlias {
 diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
-index 9621ba9..6c38097 100644
+index 9621ba9..68b65c6 100644
 --- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
 +++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
-@@ -1098,6 +1098,13 @@ use rustc_span::RemapPathScopeComponents;
+@@ -786,6 +786,36 @@ use rustc_span::RemapPathScopeComponents;
+                 let mut trait_cpn = traits_cons_cpn.reborrow().init_h();
+                 let name = self.tcx.def_path_str(trait_def_id);
+                 trait_cpn.set_name(&name);
++                // VeriFast names the typeid of <T as Trait>::Assoc after the trait and the
++                // associated type. Export those that are known to be Sized.
++                let sized_trait = self.tcx.lang_items().sized_trait();
++                let sized_assoc_types: Vec<String> =
++                    if self.tcx.generics_of(trait_def_id).count() != 1 {
++                        Vec::new()
++                    } else {
++                        self.tcx
++                            .associated_items(trait_def_id)
++                            .in_definition_order()
++                            .filter(|item| {
++                                item.kind.as_def_kind() == rustc_hir::def::DefKind::AssocTy
++                                    && self.tcx.generics_of(item.def_id).own_params.is_empty()
++                                    && self.tcx.item_bounds(item.def_id).skip_binder().iter().any(
++                                        |clause| match clause.as_trait_clause() {
++                                            Some(trait_clause) => {
++                                                Some(trait_clause.def_id()) == sized_trait
++                                            }
++                                            None => false,
++                                        },
++                                    )
++                            })
++                            .map(|item| item.name().to_string())
++                            .collect()
++                    };
++                let mut sized_assoc_types_cpn =
++                    trait_cpn.reborrow().init_sized_assoc_types(sized_assoc_types.len());
++                for (i, assoc_type) in sized_assoc_types.iter().enumerate() {
++                    sized_assoc_types_cpn.set(i, assoc_type);
++                }
+                 let mut required_fns_cpn = trait_cpn.reborrow().init_required_fns();
+                 for item in self
+                     .tcx
+@@ -1098,6 +1128,13 @@ use rustc_span::RemapPathScopeComponents;
              });
              adt_def_cpn.set_implements_drop(adt_def.has_dtor(tcx));
              adt_def_cpn.set_is_repr_c(adt_def.repr().c());
@@ -266,7 +446,19 @@ index 9621ba9..6c38097 100644
          }
  
          fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
-@@ -1826,9 +1833,19 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1224,6 +1261,11 @@ use rustc_span::RemapPathScopeComponents;
+                             Self::encode_typesystem_constant(enc_ctx.tcx, enc_ctx, &const_, term_cpn.init_const()),
+                     }
+                 }
++                ty::ClauseKind::ConstArgHasType(const_, ty) => {
++                    let mut const_arg_cpn = clause_cpn.init_const_arg_has_type();
++                    Self::encode_typesystem_constant(enc_ctx.tcx, enc_ctx, &const_, const_arg_cpn.reborrow().init_const());
++                    Self::encode_ty(enc_ctx.tcx, enc_ctx, ty, const_arg_cpn.init_ty());
++                }
+                 _ => clause_cpn.set_ignored(()),
+             }
+         }
+@@ -1826,9 +1868,19 @@ use rustc_span::RemapPathScopeComponents;
                      Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
                  }
                  ty::TyKind::Foreign(_) => ty_kind_cpn.set_foreign(()),
@@ -290,7 +482,7 @@ index 9621ba9..6c38097 100644
                  ty::TyKind::Ref(region, ty, mutability) => {
                      let ref_ty_cpn = ty_kind_cpn.init_ref();
 diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-index 4e237a6..44b4ba5 100644
+index 4e237a6..4f1a11c 100644
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 @@ -1456,6 +1456,140 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
@@ -462,7 +654,40 @@ index 4e237a6..44b4ba5 100644
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6412,14 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -4801,7 +4935,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+                     (TraitRd.RequiredFn.contract_get required_fn_cpn)))
+       else required_fns
+     in
+-    ListAux.try_map (translate_trait_required_fn adt_defs name) required_fns
++    let* required_fn_decls =
++      ListAux.try_map (translate_trait_required_fn adt_defs name) required_fns
++    in
++    (* <T as Trait>::Assoc has typeid Trait::Assoc_typeid<T>(), as for traits
++       declared in .rsspec files. *)
++    let assoc_typeid_decls =
++      TraitRd.sized_assoc_types_get_list trait_cpn
++      |> List.map (fun assoc_type ->
++             let loc = Ast.dummy_loc in
++             Ast.Func
++               ( loc,
++                 Ast.Fixpoint,
++                 Ast.unbounded_tparams [ "Self" ],
++                 Some (Ast.PtrTypeExpr (loc, Ast.ManifestTypeExpr (loc, Ast.Void))),
++                 Printf.sprintf "%s::%s_typeid" name assoc_type,
++                 [],
++                 false,
++                 (None, None),
++                 None,
++                 false,
++                 None,
++                 false,
++                 [] ))
++    in
++    Ok (assoc_typeid_decls @ required_fn_decls)
+ 
+   let decode_clause (clause_cpn : D.clause) =
+     match clause_cpn with
+@@ -6278,7 +6436,14 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -478,7 +703,7 @@ index 4e237a6..44b4ba5 100644
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7777,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -7636,8 +7801,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -490,10 +715,40 @@ index 4e237a6..44b4ba5 100644
      | _ -> None
  
 diff --git a/src/verifast1.ml b/src/verifast1.ml
-index e0bff63..2a6bb96 100644
+index e0bff63..f39edd1 100644
 --- a/src/verifast1.ml
 +++ b/src/verifast1.ml
-@@ -6514,6 +6514,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+@@ -2473,6 +2473,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+     in
+     iter [] structmap0 [] (List.rev structdeclmap)
+ 
++  let sized_projection_typeids =
++    ps |> flatmap @@ fun (PackageDecl (_, pn, _, ds)) ->
++      ds |> flatmap @@ function
++        Func (_, Fixpoint, _, _, g, [], _, _, _, _, None, _, _) ->
++          [if pn = "" then g else pn ^ "::" ^ g]
++      | _ -> []
++
+   let struct_sizedness_map1 =
+     let rec sizedness_of_type t: (bool, string) Either.t =
+       match unfold_inferred_type t with
+@@ -2491,7 +2498,14 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+       | BoundedGhostTypeParam (x, _) -> Right x
+       | InferredType _ -> failwith "sizedness_of_type: called on unresolved inferred type"
+       | ProjectionType (t, traitName, traitArgs, assocTypeName) ->
+-        failwith "sizedness_of_type: TODO: projection types"
++        (* Only Sized associated types receive a typeid function: the Rust
++           frontend exports them from the trait's item bounds, and .rsspec
++           files cannot declare ?Sized associated types. Other projections
++           are still rejected. *)
++        if List.mem (traitName ^ "::" ^ assocTypeName ^ "_typeid") sized_projection_typeids then
++          Left true
++        else
++          failwith "sizedness_of_type: TODO: projection types"
+     and get_struct_sizedness sn =
+       match try_assoc sn struct_sizedness_map1 with
+         Some (l, state_ref) -> finish_struct_sizedness_checking l sn state_ref
+@@ -6514,6 +6528,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
          ctxt#assume_forall name [trigger] (List.map (fun x -> ctxt#type_inductive) tparams) fact
        end
      in

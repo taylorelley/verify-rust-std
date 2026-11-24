@@ -54,7 +54,12 @@
     "verifast-proofs/core/sync/atomic.rs/check-scope-composition.py",
     "verifast-proofs/core/sync/atomic.rs/check-generic-helpers.py",
     "verifast-proofs/core/sync/atomic.rs/supplementary-scoped-threads.md",
-    "verifast-proofs/core/sync/atomic.rs/verifast-upstream.md"
+    "verifast-proofs/core/sync/atomic.rs/verifast-upstream.md",
+    "verifast-proofs/core/sync/atomic.rs/verify.sh",
+    "verifast-proofs/core/sync/atomic.rs/update.sh",
+    "verifast-proofs/core/sync/atomic.rs/original/atomic.rs",
+    "verifast-proofs/core/sync/atomic.rs/verified/atomic.rs",
+    "verifast-proofs/README.md"
   ],
   "requirements": {
     "BOOL-SAFETY": {
