@@ -71,6 +71,36 @@ join, including panic paths. The existing reference fixture proves the
 permission protocol for its modeled scope. The threaded runtime clients
 exercise the real API under native Rust and Miri.
 
+## Scoped counter model and lifecycle clients
+
+The Z3 queries in `check-scope-counter.py` use the same solver bundled
+with the pinned VeriFast dependencies. They check a separate abstraction
+for both 32-bit and 64-bit counters. The runner pins `scoped.rs` and
+`lifecycle.rs` and records each query and result. The source correspondence
+to review is:
+
+| Pinned Rust event | Model transition |
+| --- | --- |
+| `increment_num_running_threads` increments before checking the old count | Reserve a pending unit. Successful admission uses the old count's `usize::MAX / 2` cutoff. |
+| Admission succeeds | Transfer a pending unit to a live packet obligation without changing the count. |
+| `overflow` calls the decrement routine before panicking | Remove the rejected pending reservation. |
+| `Packet::drop` drops the unconsumed result before decrementing | Retire a live packet obligation. |
+| The decrement returns an old count of one | Notify the waiter after the last obligation is retired. |
+| `scope` observes zero with an Acquire load after the callback | The abstract model has neither a pending reservation nor a live packet obligation. |
+
+The claims assume a supplied live or pending obligation when decrementing
+and capacity for each reservation without machine-word wraparound. The
+queries test the feasibility of these premises and include counterexamples for
+lost reservations, incorrect notifications and increments at capacity. The
+model does not prove the global capacity bound, the correspondence between
+`Arc` ownership and packet retirement, the Acquire/Release edge, or Rust
+callback and panic semantics.
+
+The separate `scope-lifecycle-client.rs` uses the real standard library
+methods. Native Rust and Miri check nested borrowing and joining, the
+scope callback unwinding, worker panic propagation and consumption,
+and waiting for a borrowed result's destructor after dropping the handle.
+
 ## Review status
 
 This guide is an author audit. Independent review of the trusted contracts

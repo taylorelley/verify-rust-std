@@ -45,7 +45,11 @@
     "verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh",
     ".github/workflows/verifast-challenge-7.yml",
     "verifast-proofs/core/sync/atomic.rs/check-scope-boundary.py",
-    "verifast-proofs/core/sync/atomic.rs/review-guide.md"
+    "verifast-proofs/core/sync/atomic.rs/review-guide.md",
+    "library/std/src/thread/scoped.rs",
+    "library/std/src/thread/lifecycle.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-scope-counter.py",
+    "verifast-proofs/core/sync/atomic.rs/scope-lifecycle-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -134,6 +138,14 @@
         "verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh",
         "verifast-proofs/core/sync/atomic.rs/build-store-verifast.sh",
         ".github/workflows/verifast-challenge-7.yml"
+      ]
+    },
+    "SCOPED-LIFECYCLE-EVIDENCE": {
+      "source": "Challenge 7 scoped client proof boundary",
+      "behavior": "Track scope reservations and worker retirement, and check that the real scoped API waits for borrowed worker state to finish on successful and panic paths.",
+      "implementation": [
+        "library/std/src/thread/scoped.rs",
+        "library/std/src/thread/lifecycle.rs"
       ]
     }
   },
@@ -412,6 +424,18 @@
       "requirement": "CLEAN-REPLAY",
       "method": "review",
       "criterion": "Independently review primitive contracts and the source comparisons using the Challenge 7 review guide.",
+      "independent": true
+    },
+    "SCOPE-COUNTER-MODEL": {
+      "requirement": "SCOPED-LIFECYCLE-EVIDENCE",
+      "method": "proof",
+      "criterion": "Prove the conditional counter abstraction for 32- and 64-bit usize. Check that premises are feasible and that the counterexample controls fail the intended claims.",
+      "independent": true
+    },
+    "SCOPE-LIFECYCLE-CLIENT": {
+      "requirement": "SCOPED-LIFECYCLE-EVIDENCE",
+      "method": "test",
+      "criterion": "Exercise nested join, scope unwind, worker panic with and without explicit join, and implicit join of a destructor that holds a borrow.",
       "independent": true
     }
   },

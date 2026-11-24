@@ -49,6 +49,8 @@ prove arithmetic check-arithmetic
 prove bitwise check-arithmetic --bitwise
 prove extrema check-arithmetic --extrema
 prove scoped-thread-boundary check-scope-boundary
+run scoped-counter python3 "$proof_dir/check-scope-counter.py" \
+    "$work/verifast/vfdeps-adf88dc/lib/libz3.so" "$logs/scoped-counter"
 
 # Compile the clients in a standalone dependency-free package. Each file remains
 # a separate test crate so context-specific nightly features stay local to it.
@@ -60,7 +62,7 @@ name = "challenge-7-clients"
 version = "0.0.0"
 edition = "2024"
 TOML
-for client in bool-clients ptr-client integer-access-client swap-client compare-exchange-client arithmetic-client bitwise-client extrema-client; do
+for client in bool-clients ptr-client integer-access-client swap-client compare-exchange-client arithmetic-client bitwise-client extrema-client scope-lifecycle-client; do
     cp -- "$proof_dir/$client.rs" "$clients/tests/$client.rs"
 done
 manifest="$clients/Cargo.toml"

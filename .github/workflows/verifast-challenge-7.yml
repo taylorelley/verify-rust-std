@@ -7,6 +7,7 @@ on:
     branches: [main]
     paths:
       - 'library/core/**'
+      - 'library/std/src/thread/**'
       - 'rust-toolchain.toml'
       - 'verifast-proofs/core/sync/atomic.rs/**'
       - '.github/workflows/verifast-challenge-7.yml'
@@ -16,6 +17,7 @@ on:
       - 'supercritical/challenge-7'
     paths:
       - 'library/core/**'
+      - 'library/std/src/thread/**'
       - 'rust-toolchain.toml'
       - 'verifast-proofs/core/sync/atomic.rs/**'
       - '.github/workflows/verifast-challenge-7.yml'
