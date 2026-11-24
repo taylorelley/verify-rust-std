@@ -190,7 +190,7 @@ def main():
         verify(replace(generated, read, write), "store-with-read-fraction",
                "No matching heap chunks: [_]std::intrinsics::atomic_points_to")
         verify((here / "ptr-wide-probe.rs").read_text(), "wide-pointer",
-               "expected u8, u16 or a concrete thin pointer")
+               "expected a concrete integer or thin pointer")
 
     coverage.write_text(json.dumps({"target": "x86_64-unknown-linux-gnu", "pointee_sizes": verified_sizes}) + "\n")
     print("AtomicPtr::from_ptr verified for pointee sizes 0, 1, 2, 3, and 4.")

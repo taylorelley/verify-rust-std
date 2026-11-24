@@ -1,6 +1,6 @@
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,131 @@
+@@ -1456,6 +1456,130 @@
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
@@ -20,7 +20,7 @@
 +        let has_volatile_arg = operation = "atomic_store" || operation = "atomic_load" in
 +        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
 +        let shape_error () =
-+          let operand_order = "expected u8, u16 or a concrete thin pointer, a concrete AtomicOrdering" in
++          let operand_order = "expected a concrete integer or thin pointer, a concrete AtomicOrdering" in
 +          reject (if extremum then "expected a concrete integer and a concrete AtomicOrdering"
 +                  else if operation = "atomic_xchg" then "expected a concrete integer or thin pointer and a concrete AtomicOrdering"
 +                  else operand_order ^ ", and VOLATILE=false")
@@ -40,8 +40,7 @@
 +            | ("atomic_max" | "atomic_min"), Int _ -> ()
 +            | ("atomic_umax" | "atomic_umin"), UInt _ -> ()
 +            | _, _ when extremum -> reject "expected an integer operand matching the comparison signedness"
-+            | _, (UInt (U8 | U16) | RawPtr {is_thin = true; _}) -> ()
-+            | "atomic_xchg", (Int _ | UInt _) -> ()
++            | _, (Int _ | UInt _ | RawPtr {is_thin = true; _}) -> ()
 +            | _ -> shape_error ());
 +            (match rest with
 +            | [] when not has_volatile_arg -> ()
@@ -132,7 +131,7 @@
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2511,17 @@
+@@ -2386,17 +2510,17 @@
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -160,7 +159,7 @@
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6403,14 @@
+@@ -6278,7 +6402,14 @@
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -176,7 +175,7 @@
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7768,8 @@
+@@ -7636,8 +7767,8 @@
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None

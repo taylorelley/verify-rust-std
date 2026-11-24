@@ -39,7 +39,9 @@
     "verifast-proofs/core/sync/atomic.rs/arithmetic.rs.in",
     "verifast-proofs/core/sync/atomic.rs/arithmetic-client.rs",
     "verifast-proofs/core/sync/atomic.rs/bitwise-client.rs",
-    "verifast-proofs/core/sync/atomic.rs/extrema-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/extrema-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-integer-access.py",
+    "verifast-proofs/core/sync/atomic.rs/integer-access-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -108,6 +110,14 @@
     "EXTREMA-SAFETY": {
       "source": "Challenge 7 Parts 2 and 3",
       "behavior": "Signed and unsigned minimum and maximum preserve live aligned storage and the slot invariant when the supplied value satisfies it.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "INTEGER-ACCESS-SAFETY": {
+      "source": "Challenge 7 Parts 2 and 3",
+      "behavior": "Ordinary integer loads and stores preserve initialized and aligned storage. Loads accept read permission and stores require full atomic permission.",
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
@@ -347,6 +357,24 @@
       "requirement": "EXTREMA-SAFETY",
       "method": "test",
       "criterion": "Check stored and previous values at signed and unsigned integer limits using native and Miri clients.",
+      "independent": true
+    },
+    "INTEGER-ACCESS-PERMISSIONS": {
+      "requirement": "INTEGER-ACCESS-SAFETY",
+      "method": "proof",
+      "criterion": "Prove safe ordinary loads and stores for all 12 integer types with panic unwind and enforce read and write permissions. Reject invalid and volatile intrinsic calls.",
+      "independent": true
+    },
+    "INTEGER-ACCESS-SOURCE": {
+      "requirement": "INTEGER-ACCESS-SAFETY",
+      "method": "test",
+      "criterion": "Compare compiled load and store dispatch for all legal and panic orderings and detect a load or store ordering mutation.",
+      "independent": true
+    },
+    "INTEGER-ACCESS-CLIENT": {
+      "requirement": "INTEGER-ACCESS-SAFETY",
+      "method": "test",
+      "criterion": "Exercise boundary values and all load and store orderings with native tests and Miri on both proof targets.",
       "independent": true
     }
   },

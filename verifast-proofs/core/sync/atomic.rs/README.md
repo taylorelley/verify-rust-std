@@ -71,12 +71,12 @@ The raw-byte read permission checks are described below.
 
 VeriFast 26.10 fails on the enum-valued const argument in the reduced
 `store-const-ordering.rs` probe. The checked patch extends the frontend at the
-direct intrinsic call. It verifies the operand type is `u8`, accepts only the
-three legal orderings for each operation and `VOLATILE = false`, and dispatches to the
-corresponding primitive specification. The patch adds load specifications
-that preserve the supplied byte permission and return a value satisfying its invariant. Those specifications consume an
-atomic permission for the destination and require that the stored byte
-satisfies its invariant. The compiler's atomic primitive remains trusted.
+direct intrinsic call. The Boolean replay uses `u8`. The patched verifier
+also accepts the other integer widths and thin pointers. Load and store
+each accept three legal orderings with `VOLATILE = false`. Loads preserve
+the supplied read permission and return a value satisfying the slot
+invariant. Stores require full byte permission and an input that satisfies
+the invariant. The compiler's atomic primitive remains trusted.
 
 To reproduce on Linux x86-64, use Rustup with the two nightlies above.
 
@@ -427,6 +427,39 @@ procedure above and run both target variants. The 128-bit cases are
 verified for the AArch64 Linux target and exercised there under Miri.
 The trusted contracts still need independent review. The concrete
 comparison results are tested on the pinned nightly.
+
+## Complete integer load and store replay
+
+Use the rebuilt verifier, pinned compiler and both target libraries.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-integer-access.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-integer-access
+"$rustc_path" --edition=2024 --test "$proof/integer-access-client.rs" \
+  -o /tmp/challenge-7-integer-access-client
+/tmp/challenge-7-integer-access-client
+```
+
+The matrix covers the ten fixed-width and two pointer-width integer
+types. The 128-bit cases use the AArch64 Linux target. The specialized
+programs verify all 72 legal load and store branches and 48 invalid
+ordering panic branches. Unwinding preserves the thread and lifetime
+tokens. Each case proves a fractional read and rejects a store with
+that same fractional permission. The verifier continues to reject
+volatile access and illegal intrinsic orderings.
+
+The replay checks the slot layout and compares optimized LLVM dispatch
+with the pinned source for each type and target. It detects changes to
+both load and store orderings and writes `coverage.json` on success.
+
+For Miri, use `integer-access-client.rs` as `src/lib.rs` and run both
+the default and `aarch64-unknown-linux-gnu` targets. The client checks
+integer limits and confirms that invalid orderings panic without writing
+to the slot. Independent review of the trusted contracts and source
+comparison is still required.
 
 ## Complete constructor replay
 
