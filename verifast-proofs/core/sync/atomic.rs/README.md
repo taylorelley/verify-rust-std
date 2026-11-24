@@ -32,6 +32,11 @@ compiled dispatch, target coverage, and native and Miri results to
 `evidence/result.log`. A failed step exits with its status and leaves
 the logs in place.
 
+The [proof review guide](review-guide.md) maps the Challenge 7 safety
+claims to the evidence and lists the trusted assumptions. The `scoped-thread-boundary`
+step records expected VeriFast frontend limitations beside a positive
+verifier control.
+
 ## Historical result
 
 [The ARM64 macOS 15 replay](https://github.com/taylorelley/verify-rust-std/actions/runs/45059674164)

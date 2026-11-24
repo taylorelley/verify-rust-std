@@ -43,7 +43,9 @@
     "verifast-proofs/core/sync/atomic.rs/check-integer-access.py",
     "verifast-proofs/core/sync/atomic.rs/integer-access-client.rs",
     "verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh",
-    ".github/workflows/verifast-challenge-7.yml"
+    ".github/workflows/verifast-challenge-7.yml",
+    "verifast-proofs/core/sync/atomic.rs/check-scope-boundary.py",
+    "verifast-proofs/core/sync/atomic.rs/review-guide.md"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -398,6 +400,18 @@
       "requirement": "CLEAN-REPLAY",
       "method": "test",
       "criterion": "The hosted GitHub Actions job finishes successfully and publishes the evidence artifact for the candidate commit.",
+      "independent": true
+    },
+    "SCOPED-THREAD-BOUNDARY": {
+      "requirement": "BOOL-SAFETY",
+      "method": "test",
+      "criterion": "Confirm the real scoped-thread fixtures compile against the pinned Rust library and report the specific proof frontend blockers against a passing verifier control.",
+      "independent": true
+    },
+    "SOURCE-AND-CONTRACT-REVIEW": {
+      "requirement": "CLEAN-REPLAY",
+      "method": "review",
+      "criterion": "Independently review primitive contracts and the source comparisons using the Challenge 7 review guide.",
       "independent": true
     }
   },
