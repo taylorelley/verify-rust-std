@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay atomic add and subtract safety proofs for integers and pointer offsets."""
+"""Replay atomic arithmetic or bitwise safety proofs and check compiled dispatch."""
 
 import argparse
 import hashlib
@@ -26,7 +26,10 @@ def main():
     parser.add_argument("verifast_bin", type=Path)
     parser.add_argument("rustc", type=Path)
     parser.add_argument("logs", type=Path)
+    parser.add_argument("--bitwise", action="store_true", help="check AND, NAND, OR and XOR")
     args = parser.parse_args()
+    operations = ("and", "nand", "or", "xor") if args.bitwise else ("add", "sub")
+    family = "bitwise" if args.bitwise else "arithmetic"
     here = Path(__file__).resolve().parent
     source = here.parents[3] / "library/core/src"
     constructor = runpy.run_path(str(here / "check-bool-constructor.py"))
@@ -37,19 +40,20 @@ def main():
     replace = constructor["replace_once"]
     atomic = (source / "sync/atomic.rs").read_bytes()
     if hashlib.sha256(atomic).hexdigest() != constructor["SOURCE_SHA256"]:
-        raise SystemExit("Review the changed atomic source before replaying arithmetic")
+        raise SystemExit("Review the changed atomic source before replay")
     rustc = args.rustc.resolve()
     sysroot = Path(subprocess.check_output([rustc, "--print", "sysroot"], text=True).strip())
     order_decl = runpy.run_path(str(here / "check-bool-clients.py"))["store_declaration"]
     for root in (source, sysroot / "lib/rustlib/src/rust/library/core/src"):
         intrinsic_source = (root / "intrinsics/mod.rs").read_text()
-        for op in ("add", "sub"):
+        for op in operations:
+            intrinsic = f"atomic_{op}" if args.bitwise else f"atomic_x{op}"
             declaration = (
-                f"#[rustc_intrinsic]\n#[rustc_nounwind]\npub const unsafe fn atomic_x{op}"
+                f"#[rustc_intrinsic]\n#[rustc_nounwind]\npub const unsafe fn {intrinsic}"
                 "<T: Copy, U: Copy, const ORD: AtomicOrdering>(\n    dst: *mut T,\n    src: U,\n) -> T;"
             )
             if declaration not in intrinsic_source:
-                raise SystemExit(f"Review the changed declaration of atomic_x{op}")
+                raise SystemExit(f"Review the changed declaration of {intrinsic}")
         if hashlib.sha256(order_decl(intrinsic_source).encode()).hexdigest() != (
             "6bb2f571c911c962ecd2ebe85bf74df718dfab191f22a8f70ee9dad71cca0fc5"
         ):
@@ -79,6 +83,9 @@ def main():
 
         def check_case(label, atomic_type, slot, delta, layout, target, bits, pointer_size=None):
             is_pointer = pointer_size is not None
+            is_bool = label == "bool"
+            public = "bool" if is_bool else delta
+            returns = "bool" if is_bool else slot
             flags = [*swap["FLAGS"], "--target", target]
             pointer_arg = "<Pointee>" if is_pointer else ""
             pointee = f"\nstruct Pointee([u8; {pointer_size}]);\n" if is_pointer else ""
@@ -91,8 +98,14 @@ def main():
                 ATOMIC=atomic_type, WIDTH=bits // 8,
                 ALIGN_LEMMA="atomic_align_of_ptr::<Pointee>()" if is_pointer else f"atomic_align_of_{slot}()",
             )
-            base = header + replace(base, f"fix accepts_value(value: {slot}) -> bool {{ true }}\n", "")
-            base = base.replace("accepts_value", invariant)
+            if is_bool:
+                invariant = "std::intrinsics::atomic_bool_byte"
+                base = (here / "bool-constructor.rs").read_text()
+                base = replace(base, "fix accepts_u8(value: u8) -> bool { value == 0 || value == 1 }\n", "")
+                base = header + base.replace("accepts_u8", invariant)
+            else:
+                base = header + replace(base, f"fix accepts_value(value: {slot}) -> bool {{ true }}\n", "")
+                base = base.replace("accepts_value", invariant)
 
             def verify(text, name, expected, reject=False):
                 proof.write_text(text)
@@ -103,12 +116,18 @@ def main():
                 if bool(status) != reject or not all(marker in output for marker in expected):
                     raise SystemExit(f"Unexpected verifier result in {label}/{name}.log")
 
-            for op in ("add", "sub"):
-                api = f"fetch_byte_{op}" if is_pointer else f"fetch_{op}"
-                apis = (api, f"fetch_ptr_{op}") if is_pointer else (api,)
+            checked_methods = []
+            for op in operations:
+                if is_pointer and op == "nand":
+                    continue
+                bool_nand = is_bool and op == "nand"
+                scaled_pointer = is_pointer and not args.bitwise
+                api = f"fetch_byte_{op}" if scaled_pointer else f"fetch_{op}"
+                apis = (api, f"fetch_ptr_{op}") if scaled_pointer else (api,)
+                checked_methods.extend(apis)
 
                 def bridges(name):
-                    return "".join(BRIDGE.substitute(ATOMIC=name, DELTA=delta, SLOT=slot, METHOD=api_name)
+                    return "".join(BRIDGE.substitute(ATOMIC=name, DELTA=public, SLOT=returns, METHOD=api_name)
                                    for api_name in apis)
 
                 def compile_dispatch(crate, name):
@@ -126,18 +145,42 @@ def main():
                         compiled, aliases.get(f"sc_verify_{name}", f"sc_verify_{name}")
                     ) for name in apis}
 
+                primitive = "xor" if bool_nand else op
+                intrinsic = f"atomic_{primitive}" if args.bitwise else f"atomic_x{primitive}"
+                # Preserve the order of arms from the pinned source for the IR comparison.
+                arm_order = list(swap["ORDERS"])
+                if primitive in ("or", "xor"):
+                    arm_order[0], arm_order[-1] = arm_order[-1], arm_order[0]
                 calls = {
-                    order: f"intrinsics::atomic_x{op}::<{slot}, {delta}, {{ AO::{order} }}>(dst, val)"
-                    for order in swap["ORDERS"]
+                    order: f"intrinsics::{intrinsic}::<{slot}, {delta}, {{ AO::{order} }}>(dst, val)"
+                    for order in arm_order
                 }
-                mapping = dict(OP=op, METHOD=api, CONST="" if is_pointer else "const ", SLOT=slot,
-                               DELTA=delta, ATOMIC=atomic_type,
+                condition = f" &*& {invariant}(val) == true" if is_bool else ""
+                mapping = dict(OP=primitive, METHOD=api, CONST="" if is_pointer else "const ", SLOT=slot,
+                               DELTA=delta, ATOMIC=atomic_type, PUBLIC=public, RETURN=returns,
+                               INPUT_CONDITION=condition,
                                BRANCHES="\n".join(f"            {order} => {call}," for order, call in calls.items()))
+                if bool_nand:
+                    mapping["ACCESS"] = (
+                        "if val { atomic_xor(self.v.get().cast::<u8>(), 1, order) != 0 } "
+                        "else { atomic_swap(self.v.get().cast::<u8>(), 1, order) != 0 }"
+                    )
+                else:
+                    value = "val as u8" if is_bool else "val"
+                    mapping["ACCESS"] = f"atomic_{op}(self.v.get().cast::<{slot}>(), {value}, order)"
+                    if is_bool:
+                        mapping["ACCESS"] += " != 0"
                 methods = Template(method).substitute(mapping)
-                if is_pointer:
+                if scaled_pointer:
                     methods += Template(element).substitute(mapping)
                 signature = f"impl {atomic_type} {{\n"
                 text = replace(base, signature, signature + methods) + "\n" + Template(helper).substitute(mapping)
+                if bool_nand:
+                    exchange = "\n".join(
+                        f"            {order} => intrinsics::atomic_xchg::<u8, {{ AO::{order} }}>(dst, val),"
+                        for order in swap["ORDERS"]
+                    )
+                    text += "\n" + Template(helper).substitute(dict(mapping, OP="swap", BRANCHES=exchange))
 
                 stable_bridge = bridges(atomic_type + pointer_arg).replace(
                     "#[unsafe(no_mangle)]",
@@ -149,37 +192,40 @@ def main():
                 suffix = layout.replace("$TYPE", "") + bridges(atomic_type)
                 proof.write_text(text + suffix)
                 if compile_dispatch(proof, "specialized") != expected:
-                    raise SystemExit(f"Arithmetic LLVM dispatch mismatch for {label}/{op}")
+                    raise SystemExit(f"LLVM dispatch mismatch for {label}/{op}")
                 for name, dispatch in expected.items():
-                    # LLVM can express a zero-offset operation as an atomic OR with zero.
-                    operation = "or" if pointer_size == 0 and name.startswith("fetch_ptr_") else op
-                    operand = "0" if operation == "or" else r"%[\w.]+"
-                    actual = re.findall(
-                        rf"atomicrmw {operation} ptr %a, i{bits} {operand} (\w+), align {bits // 8}\b",
-                        dispatch,
-                    )
-                    if sorted(actual) != sorted(swap["ORDERS"].values()):
-                        raise SystemExit(f"Missing or unexpected orderings for {label}/{name}")
+                    zero_offset = scaled_pointer and pointer_size == 0 and name.startswith("fetch_ptr_")
+                    opcodes = ("xor", "xchg") if bool_nand else (("or",) if zero_offset else (op,))
+                    operand = "1" if bool_nand else ("0" if zero_offset else r"%[\w.]+")
+                    for opcode in opcodes:
+                        actual = re.findall(
+                            rf"atomicrmw {opcode} ptr %a, i{bits} {operand} (\w+), align {bits // 8}\b",
+                            dispatch,
+                        )
+                        if sorted(actual) != sorted(swap["ORDERS"].values()):
+                            raise SystemExit(f"Missing or unexpected orderings for {label}/{name}/{opcode}")
                 wrong_order = replace(text, calls["AcqRel"], calls["AcqRel"].replace("AcqRel", "Acquire"))
                 proof.write_text(wrong_order + suffix)
                 if compile_dispatch(proof, "changed-order") == expected:
-                    raise SystemExit(f"Source comparison accepted a changed arithmetic ordering for {label}/{op}")
+                    raise SystemExit(f"Source comparison accepted a changed ordering for {label}/{op}")
 
-                if label == "ptr-3":
+                if label == "ptr-3" and scaled_pointer:
                     wrong_scale = replace(text, "wrapping_mul(size_of::<Pointee>())", "wrapping_mul(1)")
                     proof.write_text(wrong_scale + suffix)
                     if compile_dispatch(proof, "changed-scale") == expected:
                         raise SystemExit(f"Source comparison accepted a changed element size for {op}")
                 if label == "u16":
-                    other = "sub" if op == "add" else "add"
-                    wrong_opcode = replace(text, calls["Relaxed"], calls["Relaxed"].replace(f"x{op}", f"x{other}"))
+                    other = ("atomic_or" if op == "xor" else "atomic_xor") if args.bitwise else (
+                        "atomic_xsub" if op == "add" else "atomic_xadd")
+                    wrong_opcode = replace(text, calls["Relaxed"], calls["Relaxed"].replace(intrinsic, other))
                     proof.write_text(wrong_opcode + suffix)
                     if compile_dispatch(proof, "changed-opcode") == expected:
-                        raise SystemExit(f"Source comparison accepted an opposite operation for {op}")
+                        raise SystemExit(f"Source comparison accepted a changed opcode for {op}")
 
+                helpers = (primitive, "swap") if bool_nand else (primitive,)
                 verify(text, f"proof-{op}", ("0 errors found", f"target: {target}",
                        *(f"Verifying function '{atomic_type}::{name}'" for name in apis),
-                       f"Verifying function 'atomic_{op}'"))
+                       *(f"Verifying function 'atomic_{name}'" for name in helpers)))
 
                 if label == "u16":
                     for name, fraction, inv in (
@@ -187,12 +233,12 @@ def main():
                     ):
                         probe = f"""
 //@ fix only_zero(value: u16) -> bool {{ value == 0 }}
-unsafe fn bad_arithmetic(dst: *mut u16, val: u16) -> u16
+unsafe fn rejected_operation(dst: *mut u16, val: u16) -> u16
 //@ req std::intrinsics::atomic_points_to(dst, {fraction}, {inv});
 //@ ens std::intrinsics::atomic_points_to(dst, {fraction}, {inv});
 //@ on_unwind_ens false;
 {{
-    unsafe {{ intrinsics::atomic_x{op}::<u16, u16, {{ AO::Relaxed }}>(dst, val) }}
+    unsafe {{ intrinsics::{intrinsic}::<u16, u16, {{ AO::Relaxed }}>(dst, val) }}
 }}
 """
                         verify(text + probe, f"reject-{name}-{op}", (
@@ -206,10 +252,19 @@ unsafe fn bad_arithmetic(dst: *mut u16, val: u16) -> u16
                            ("expected matching integer operands or a concrete thin pointer with a usize delta",),
                            reject=True)
 
-            coverage[label] = {"target": target, "methods": ["fetch_add", "fetch_sub"] if not is_pointer
-                               else ["fetch_byte_add", "fetch_byte_sub", "fetch_ptr_add", "fetch_ptr_sub"],
-                               "orderings": list(swap["ORDERS"])}
+                if is_bool:
+                    if bool_nand:
+                        invalid = replace(text, calls["Relaxed"], calls["Relaxed"].replace(intrinsic, "atomic_nand"))
+                        diagnostic = "No matching heap chunks: [_]std::intrinsics::atomic_points_to"
+                    else:
+                        invalid = replace(text, "val as u8", "2")
+                        diagnostic = "atomic_bool_byte(2)"
+                    verify(invalid, f"reject-invalid-boolean-{op}", (diagnostic,), reject=True)
 
+            coverage[label] = {"target": target, "methods": checked_methods, "orderings": list(swap["ORDERS"])}
+
+        if args.bitwise:
+            check_case("bool", "AtomicBool", "u8", "u8", constructor["LAYOUT"], matrix["HOST"], 8)
         integers = [(f"{sign}{bits}", bits, matrix["HOST"] if bits < 128 else matrix["WIDE"])
                     for bits in matrix["WIDTHS"] for sign in "iu"]
         integers += [(kind, 64, matrix["HOST"]) for kind in ("isize", "usize")]
@@ -222,7 +277,7 @@ unsafe fn bad_arithmetic(dst: *mut u16, val: u16) -> u16
             check_case(f"ptr-{size}", "AtomicPtr", "*mut Pointee", "usize", layout, matrix["HOST"], 64, size)
 
     report.write_text(json.dumps(coverage, indent=2) + "\n")
-    print(f"Verified arithmetic and matched all five orderings for {len(coverage)} slot specializations.")
+    print(f"Verified {family} operations and matched all five orderings for {len(coverage)} slot specializations.")
 
 
 if __name__ == "__main__":

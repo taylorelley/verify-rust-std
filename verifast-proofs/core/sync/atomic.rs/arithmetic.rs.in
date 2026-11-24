@@ -1,4 +1,4 @@
-    pub ${CONST}fn $METHOD<'a>(&'a self, val: $DELTA, order: Ordering) -> $SLOT
+    pub ${CONST}fn $METHOD<'a>(&'a self, val: $PUBLIC, order: Ordering) -> $RETURN
     //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<$ATOMIC>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
     //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
     //@ on_unwind_ens false;
@@ -7,7 +7,7 @@
             //@ leak <Ordering>.own(_, _);
             //@ close exists::<*$ATOMIC>(self);
             //@ close exists::<lifetime_t>('a);
-            atomic_$OP(self.v.get().cast::<$SLOT>(), val, order)
+            $ACCESS
         }
     }
 // ELEMENT METHOD
@@ -26,7 +26,7 @@
     }
 // HELPER
 const unsafe fn atomic_$OP(dst: *mut $SLOT, val: $DELTA, order: Ordering) -> $SLOT
-//@ req thread_token(currentThread) &*& exists::<*$ATOMIC>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]${ATOMIC}_share(k, currentThread, atomic) &*& dst == ref_origin(atomic) as *$SLOT;
+//@ req thread_token(currentThread) &*& exists::<*$ATOMIC>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]${ATOMIC}_share(k, currentThread, atomic) &*& dst == ref_origin(atomic) as *$SLOT$INPUT_CONDITION;
 //@ ens thread_token(currentThread) &*& [q]lifetime_token(k);
 //@ on_unwind_ens false;
 {

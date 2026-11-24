@@ -352,6 +352,45 @@ exact arithmetic results and pointer provenance are checked by concrete
 tests. The formal contracts and source comparison still need independent
 review.
 
+## Atomic bitwise operations
+
+Replay the bitwise cases with the arithmetic runner and the same two
+pinned toolchains.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-arithmetic.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-bitwise --bitwise
+"$rustc_path" --edition=2024 --test "$proof/bitwise-client.rs" \
+  -o /tmp/challenge-7-bitwise-client
+/tmp/challenge-7-bitwise-client
+```
+
+The matrix covers AND, NAND, OR and XOR for the native Boolean path and
+signed and unsigned integers, including pointer-width integers. It also
+covers AND, OR and XOR for the five thin pointer specializations.
+Pointer NAND has no public method in the pinned source. The runner
+checks all five orderings against optimized LLVM output and detects
+changed orderings and opcodes.
+
+The primitive contracts preserve unrestricted integer and pointer slots.
+The byte contracts for AND, OR and XOR additionally accept Boolean slots
+with operands of 0 or 1. For Boolean NAND, the source and proof use XOR
+with 1 or exchange with 1, depending on the input. A negative check
+replaces XOR with byte NAND and confirms that the narrower Boolean
+invariant prevents the call.
+
+The native and Miri clients check the Boolean truth tables, integer
+bit patterns, and pointer tagging and untagging followed by a live
+dereference. To replay under Miri, use `bitwise-client.rs` as
+`src/lib.rs` and run the default and `aarch64-unknown-linux-gnu`
+targets as in the arithmetic replay. The 128-bit proof and Miri cases
+use the AArch64 Linux target. The trusted primitive contracts still
+need independent review. Pointer provenance and concrete bitwise
+results are exercised by tests.
+
 ## Complete constructor replay
 
 Install the AArch64 target libraries for both pinned Rust toolchains. The

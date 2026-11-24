@@ -37,7 +37,8 @@
     "verifast-proofs/core/sync/atomic.rs/compare-exchange-client.rs",
     "verifast-proofs/core/sync/atomic.rs/check-arithmetic.py",
     "verifast-proofs/core/sync/atomic.rs/arithmetic.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/arithmetic-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/arithmetic-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/bitwise-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -90,6 +91,14 @@
     "ARITHMETIC-SAFETY": {
       "source": "Challenge 7 Parts 2 and 3",
       "behavior": "Addition and subtraction preserve live aligned storage under full atomic byte permission for the supported integer and thin pointer types.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "BITWISE-SAFETY": {
+      "source": "Challenge 7 Parts 2 and 3",
+      "behavior": "Atomic AND, NAND, OR and XOR preserve live aligned storage under full atomic byte permission. The Boolean wrappers preserve the Boolean byte invariant.",
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
@@ -293,6 +302,24 @@
       "requirement": "ARITHMETIC-SAFETY",
       "method": "test",
       "criterion": "Check previous values, wrapping integer limits, pointer address wraparound and restored live pointer dereferences with native and Miri clients.",
+      "independent": true
+    },
+    "BITWISE-PERMISSIONS": {
+      "requirement": "BITWISE-SAFETY",
+      "method": "proof",
+      "criterion": "Verify bitwise methods on the Boolean, integer and pointer matrix. Reject fractional write permission, unsupported value invariants, an incorrect pointer mask type and invalid Boolean operations.",
+      "independent": true
+    },
+    "BITWISE-SOURCE": {
+      "requirement": "BITWISE-SAFETY",
+      "method": "test",
+      "criterion": "Match bitwise compiler lowering for all five orderings and detect opcode and ordering mutations. Verify that Boolean NAND selects XOR or exchange.",
+      "independent": true
+    },
+    "BITWISE-CLIENT": {
+      "requirement": "BITWISE-SAFETY",
+      "method": "test",
+      "criterion": "Check Boolean truth tables, integer bit patterns and pointer tagging and untagging in native and Miri clients.",
       "independent": true
     }
   },
