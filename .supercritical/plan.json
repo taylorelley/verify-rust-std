@@ -38,7 +38,8 @@
     "verifast-proofs/core/sync/atomic.rs/check-arithmetic.py",
     "verifast-proofs/core/sync/atomic.rs/arithmetic.rs.in",
     "verifast-proofs/core/sync/atomic.rs/arithmetic-client.rs",
-    "verifast-proofs/core/sync/atomic.rs/bitwise-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/bitwise-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/extrema-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -99,6 +100,14 @@
     "BITWISE-SAFETY": {
       "source": "Challenge 7 Parts 2 and 3",
       "behavior": "Atomic AND, NAND, OR and XOR preserve live aligned storage under full atomic byte permission. The Boolean wrappers preserve the Boolean byte invariant.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "EXTREMA-SAFETY": {
+      "source": "Challenge 7 Parts 2 and 3",
+      "behavior": "Signed and unsigned minimum and maximum preserve live aligned storage and the slot invariant when the supplied value satisfies it.",
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
@@ -320,6 +329,24 @@
       "requirement": "BITWISE-SAFETY",
       "method": "test",
       "criterion": "Check Boolean truth tables, integer bit patterns and pointer tagging and untagging in native and Miri clients.",
+      "independent": true
+    },
+    "EXTREMA-PERMISSIONS": {
+      "requirement": "EXTREMA-SAFETY",
+      "method": "proof",
+      "criterion": "Verify all five orderings across the integer matrix. Prove a restricted invariant for valid input and reject invalid values, write attempts with read permission and an intrinsic with the wrong signedness.",
+      "independent": true
+    },
+    "EXTREMA-SOURCE": {
+      "requirement": "EXTREMA-SAFETY",
+      "method": "test",
+      "criterion": "Match compiled minimum and maximum dispatch and detect changes to memory ordering and comparison signedness.",
+      "independent": true
+    },
+    "EXTREMA-CLIENT": {
+      "requirement": "EXTREMA-SAFETY",
+      "method": "test",
+      "criterion": "Check stored and previous values at signed and unsigned integer limits using native and Miri clients.",
       "independent": true
     }
   },

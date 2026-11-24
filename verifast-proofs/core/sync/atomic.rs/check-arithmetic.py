@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay atomic arithmetic or bitwise safety proofs and check compiled dispatch."""
+"""Replay arithmetic, bitwise or extrema safety proofs and check compiled dispatch."""
 
 import argparse
 import hashlib
@@ -26,10 +26,16 @@ def main():
     parser.add_argument("verifast_bin", type=Path)
     parser.add_argument("rustc", type=Path)
     parser.add_argument("logs", type=Path)
-    parser.add_argument("--bitwise", action="store_true", help="check AND, NAND, OR and XOR")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--bitwise", action="store_true", help="check AND, NAND, OR and XOR")
+    mode.add_argument("--extrema", action="store_true", help="check signed and unsigned minimum and maximum")
     args = parser.parse_args()
-    operations = ("and", "nand", "or", "xor") if args.bitwise else ("add", "sub")
-    family = "bitwise" if args.bitwise else "arithmetic"
+    if args.extrema:
+        family, operations = "extrema", ("min", "max")
+    elif args.bitwise:
+        family, operations = "bitwise", ("and", "nand", "or", "xor")
+    else:
+        family, operations = "arithmetic", ("add", "sub")
     here = Path(__file__).resolve().parent
     source = here.parents[3] / "library/core/src"
     constructor = runpy.run_path(str(here / "check-bool-constructor.py"))
@@ -46,12 +52,19 @@ def main():
     order_decl = runpy.run_path(str(here / "check-bool-clients.py"))["store_declaration"]
     for root in (source, sysroot / "lib/rustlib/src/rust/library/core/src"):
         intrinsic_source = (root / "intrinsics/mod.rs").read_text()
-        for op in operations:
-            intrinsic = f"atomic_{op}" if args.bitwise else f"atomic_x{op}"
-            declaration = (
-                f"#[rustc_intrinsic]\n#[rustc_nounwind]\npub const unsafe fn {intrinsic}"
-                "<T: Copy, U: Copy, const ORD: AtomicOrdering>(\n    dst: *mut T,\n    src: U,\n) -> T;"
-            )
+        if args.extrema:
+            signatures = {
+                f"atomic_{op}": "<T: Copy, const ORD: AtomicOrdering>(dst: *mut T, src: T) -> T;"
+                for op in ("min", "max", "umin", "umax")
+            }
+        else:
+            prefix = "atomic_" if args.bitwise else "atomic_x"
+            signatures = {
+                prefix + op: "<T: Copy, U: Copy, const ORD: AtomicOrdering>(\n    dst: *mut T,\n    src: U,\n) -> T;"
+                for op in operations
+            }
+        for intrinsic, signature in signatures.items():
+            declaration = f"#[rustc_intrinsic]\n#[rustc_nounwind]\npub const unsafe fn {intrinsic}{signature}"
             if declaration not in intrinsic_source:
                 raise SystemExit(f"Review the changed declaration of {intrinsic}")
         if hashlib.sha256(order_decl(intrinsic_source).encode()).hexdigest() != (
@@ -146,16 +159,19 @@ def main():
                     ) for name in apis}
 
                 primitive = "xor" if bool_nand else op
-                intrinsic = f"atomic_{primitive}" if args.bitwise else f"atomic_x{primitive}"
+                if args.extrema and slot.startswith("u"):
+                    primitive = "u" + op
+                intrinsic = f"atomic_{primitive}" if args.bitwise or args.extrema else f"atomic_x{primitive}"
+                operand_types = slot if args.extrema else f"{slot}, {delta}"
                 # Preserve the order of arms from the pinned source for the IR comparison.
                 arm_order = list(swap["ORDERS"])
                 if primitive in ("or", "xor"):
                     arm_order[0], arm_order[-1] = arm_order[-1], arm_order[0]
                 calls = {
-                    order: f"intrinsics::{intrinsic}::<{slot}, {delta}, {{ AO::{order} }}>(dst, val)"
+                    order: f"intrinsics::{intrinsic}::<{operand_types}, {{ AO::{order} }}>(dst, val)"
                     for order in arm_order
                 }
-                condition = f" &*& {invariant}(val) == true" if is_bool else ""
+                condition = f" &*& {invariant}(val) == true" if is_bool or args.extrema else ""
                 mapping = dict(OP=primitive, METHOD=api, CONST="" if is_pointer else "const ", SLOT=slot,
                                DELTA=delta, ATOMIC=atomic_type, PUBLIC=public, RETURN=returns,
                                INPUT_CONDITION=condition,
@@ -167,7 +183,7 @@ def main():
                     )
                 else:
                     value = "val as u8" if is_bool else "val"
-                    mapping["ACCESS"] = f"atomic_{op}(self.v.get().cast::<{slot}>(), {value}, order)"
+                    mapping["ACCESS"] = f"atomic_{primitive}(self.v.get().cast::<{slot}>(), {value}, order)"
                     if is_bool:
                         mapping["ACCESS"] += " != 0"
                 methods = Template(method).substitute(mapping)
@@ -195,7 +211,7 @@ def main():
                     raise SystemExit(f"LLVM dispatch mismatch for {label}/{op}")
                 for name, dispatch in expected.items():
                     zero_offset = scaled_pointer and pointer_size == 0 and name.startswith("fetch_ptr_")
-                    opcodes = ("xor", "xchg") if bool_nand else (("or",) if zero_offset else (op,))
+                    opcodes = ("xor", "xchg") if bool_nand else (("or",) if zero_offset else (primitive,))
                     operand = "1" if bool_nand else ("0" if zero_offset else r"%[\w.]+")
                     for opcode in opcodes:
                         actual = re.findall(
@@ -214,7 +230,7 @@ def main():
                     proof.write_text(wrong_scale + suffix)
                     if compile_dispatch(proof, "changed-scale") == expected:
                         raise SystemExit(f"Source comparison accepted a changed element size for {op}")
-                if label == "u16":
+                if label == "u16" and not args.extrema:
                     other = ("atomic_or" if op == "xor" else "atomic_xor") if args.bitwise else (
                         "atomic_xsub" if op == "add" else "atomic_xadd")
                     wrong_opcode = replace(text, calls["Relaxed"], calls["Relaxed"].replace(intrinsic, other))
@@ -227,7 +243,7 @@ def main():
                        *(f"Verifying function '{atomic_type}::{name}'" for name in apis),
                        *(f"Verifying function 'atomic_{name}'" for name in helpers)))
 
-                if label == "u16":
+                if label == "u16" and not args.extrema:
                     for name, fraction, inv in (
                         ("fraction", "1/2", invariant), ("narrow-invariant", "1", "only_zero"),
                     ):
@@ -252,6 +268,36 @@ unsafe fn rejected_operation(dst: *mut u16, val: u16) -> u16
                            ("expected matching integer operands or a concrete thin pointer with a usize delta",),
                            reject=True)
 
+                if args.extrema and label in ("i16", "u16"):
+                    opposite = "u" + op if label == "i16" else op
+                    opposite_type = "u16" if label == "i16" else "i16"
+                    changed = (f"intrinsics::atomic_{opposite}::<{opposite_type}, {{ AO::Relaxed }}>"
+                               f"(dst.cast(), val as {opposite_type}) as {slot}")
+                    proof.write_text(replace(text, calls["Relaxed"], changed) + suffix)
+                    if compile_dispatch(proof, "changed-signedness") == expected:
+                        raise SystemExit(f"Source comparison accepted changed signedness for {label}/{op}")
+                    invalid = replace(text, calls["Relaxed"], calls["Relaxed"].replace(intrinsic, f"atomic_{opposite}"))
+                    verify(invalid, f"reject-signedness-{op}",
+                           ("expected an integer operand matching the comparison signedness",), reject=True)
+
+                    probe = f"""
+//@ fix only_zero(value: {slot}) -> bool {{ value == 0 }}
+unsafe fn preserve_zero(dst: *mut {slot}) -> {slot}
+//@ req std::intrinsics::atomic_points_to(dst, 1, only_zero);
+//@ ens std::intrinsics::atomic_points_to(dst, 1, only_zero) &*& result == 0;
+//@ on_unwind_ens false;
+{{
+    unsafe {{ intrinsics::{intrinsic}::<{slot}, {{ AO::Relaxed }}>(dst, 0) }}
+}}
+"""
+                    verify(text + probe, f"proof-narrow-invariant-{op}",
+                           ("0 errors found", "Verifying function 'preserve_zero'"))
+                    verify(text + replace(probe, "(dst, 0)", "(dst, 1)"), f"reject-invalid-candidate-{op}",
+                           ("Cannot prove unboxed_bool(@(@only_zero, 1))",), reject=True)
+                    verify(text + probe.replace("points_to(dst, 1,", "points_to(dst, 1/2,"),
+                           f"reject-read-fraction-{op}",
+                           ("No matching heap chunks: [_]std::intrinsics::atomic_points_to",), reject=True)
+
                 if is_bool:
                     if bool_nand:
                         invalid = replace(text, calls["Relaxed"], calls["Relaxed"].replace(intrinsic, "atomic_nand"))
@@ -272,7 +318,7 @@ unsafe fn rejected_operation(dst: *mut u16, val: u16) -> u16
             atomic_type = "Atomic" + operand.title()
             layout = Template(swap["INTEGER_LAYOUT"]).substitute(TYPE=atomic_type, WIDTH=bits // 8)
             check_case(operand, atomic_type, operand, operand, layout, target, bits)
-        for size in pointer["SIZES"]:
+        for size in (() if args.extrema else pointer["SIZES"]):
             layout = pointer["LAYOUT"].replace("$SIZE", str(size))
             check_case(f"ptr-{size}", "AtomicPtr", "*mut Pointee", "usize", layout, matrix["HOST"], 64, size)
 

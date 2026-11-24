@@ -1,6 +1,6 @@
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,120 @@
+@@ -1456,6 +1456,131 @@
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
@@ -10,12 +10,19 @@
 +    match fn_ty.id.name with
 +    | ("core::intrinsics::atomic_store" | "std::intrinsics::atomic_store" |
 +       "core::intrinsics::atomic_load" | "std::intrinsics::atomic_load" |
-+       "core::intrinsics::atomic_xchg" | "std::intrinsics::atomic_xchg") as name ->
++       "core::intrinsics::atomic_xchg" | "std::intrinsics::atomic_xchg" |
++       "core::intrinsics::atomic_max" | "std::intrinsics::atomic_max" |
++       "core::intrinsics::atomic_min" | "std::intrinsics::atomic_min" |
++       "core::intrinsics::atomic_umax" | "std::intrinsics::atomic_umax" |
++       "core::intrinsics::atomic_umin" | "std::intrinsics::atomic_umin") as name ->
 +        let operation = List.hd (List.rev (String.split_on_char ':' name)) in
++        let extremum = List.mem operation ["atomic_min"; "atomic_max"; "atomic_umin"; "atomic_umax"] in
++        let has_volatile_arg = operation = "atomic_store" || operation = "atomic_load" in
 +        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
 +        let shape_error () =
 +          let operand_order = "expected u8, u16 or a concrete thin pointer, a concrete AtomicOrdering" in
-+          reject (if operation = "atomic_xchg" then "expected a concrete integer or thin pointer and a concrete AtomicOrdering"
++          reject (if extremum then "expected a concrete integer and a concrete AtomicOrdering"
++                  else if operation = "atomic_xchg" then "expected a concrete integer or thin pointer and a concrete AtomicOrdering"
 +                  else operand_order ^ ", and VOLATILE=false")
 +        in
 +        (match fn_ty.substs with
@@ -29,16 +36,19 @@
 +             val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
 +               val_tree = Leaf {data = order; size = 4}}}];
 +           }}} :: rest when fn_ty.late_bound_generic_param_count = 0 ->
-+            (match operand_type with
-+            | UInt (U8 | U16) | RawPtr {is_thin = true; _} -> ()
-+            | (Int _ | UInt _) when operation = "atomic_xchg" -> ()
++            (match operation, operand_type with
++            | ("atomic_max" | "atomic_min"), Int _ -> ()
++            | ("atomic_umax" | "atomic_umin"), UInt _ -> ()
++            | _, _ when extremum -> reject "expected an integer operand matching the comparison signedness"
++            | _, (UInt (U8 | U16) | RawPtr {is_thin = true; _}) -> ()
++            | "atomic_xchg", (Int _ | UInt _) -> ()
 +            | _ -> shape_error ());
 +            (match rest with
-+            | [] when operation = "atomic_xchg" -> ()
++            | [] when not has_volatile_arg -> ()
 +            | [{kind = Const {kind = Value {
 +                 ty = {kind = Bool};
 +                 val_tree = Leaf {data = volatile; size = 1};
-+               }}}] when operation <> "atomic_xchg" ->
++               }}}] when has_volatile_arg ->
 +                if Stdint.Uint128.to_string (DecoderAux.uint128_get volatile) <> "0" then
 +                  reject "only ordinary accesses (VOLATILE=false) are modeled"
 +            | _ -> shape_error ());
@@ -47,11 +57,12 @@
 +              | "0" -> "relaxed"
 +              | "1" when operation <> "atomic_load" -> "release"
 +              | "2" when operation <> "atomic_store" -> "acquire"
-+              | "3" when operation = "atomic_xchg" -> "acqrel"
++              | "3" when not has_volatile_arg -> "acqrel"
 +              | "4" -> "seqcst"
 +              | _ -> reject "unsupported ordering for an ordinary access"
 +            in
-+            Some ("std::intrinsics::" ^ operation ^ "_" ^ suffix, [operand])
++            let contract = if extremum then "safety" else suffix in
++            Some ("std::intrinsics::" ^ operation ^ "_" ^ contract, [operand])
 +        | _ -> shape_error ())
 +    | ("core::intrinsics::atomic_cxchg" | "std::intrinsics::atomic_cxchg" |
 +       "core::intrinsics::atomic_cxchgweak" | "std::intrinsics::atomic_cxchgweak") as name ->
@@ -121,7 +132,7 @@
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2500,17 @@
+@@ -2386,17 +2511,17 @@
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -149,7 +160,7 @@
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6392,14 @@
+@@ -6278,7 +6403,14 @@
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -165,7 +176,7 @@
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7757,8 @@
+@@ -7636,8 +7768,8 @@
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -243,7 +254,7 @@
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +409,113 @@
+@@ -358,6 +409,135 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      
@@ -351,6 +362,28 @@
 +
 +    unsafe fn atomic_xor_byte_safety(dst: *mut u8, delta: u8) -> u8;
 +    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& (valid == (atomic_value_allowed)(true) || (valid == atomic_bool_byte && atomic_bool_byte(delta) == true));
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    // Min and max select either the resident value or the supplied value.
++    // They preserve any invariant that also accepts the supplied value.
++    unsafe fn atomic_max_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_min_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_umax_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_umin_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
 +    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
 +    //@ on_unwind_ens false;
 +

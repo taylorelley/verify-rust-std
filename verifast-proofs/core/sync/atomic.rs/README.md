@@ -391,6 +391,43 @@ use the AArch64 Linux target. The trusted primitive contracts still
 need independent review. Pointer provenance and concrete bitwise
 results are exercised by tests.
 
+## Atomic minimum and maximum
+
+Use the rebuilt verifier, pinned compiler and both target libraries from
+the arithmetic replay.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-arithmetic.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-extrema --extrema
+"$rustc_path" --edition=2024 --test "$proof/extrema-client.rs" \
+  -o /tmp/challenge-7-extrema-client
+/tmp/challenge-7-extrema-client
+```
+
+The verifier checks all five orderings for `fetch_min` and `fetch_max`
+on signed and unsigned integer atomics. The compiler uses `min` and
+`max` for signed comparisons and `umin` and `umax` for unsigned
+comparisons. The replay compares compiled dispatch, including signedness
+and alignment, and detects changes to signedness or memory ordering.
+
+The trusted contracts require full byte permission and an input that
+satisfies the slot invariant. Since the operation selects either the
+resident value or the supplied value, the contracts preserve the slot
+invariant and guarantee it for the returned value. A proof client
+exercises a slot restricted to zero. The controls reject a candidate
+outside that invariant, a read-only byte fraction, and a mismatch
+between the operand type and the intrinsic's comparison signedness.
+
+The runtime client checks the previous and stored values across each
+type's limits. Use `extrema-client.rs` as `src/lib.rs` in the Miri
+procedure above and run both target variants. The 128-bit cases are
+verified for the AArch64 Linux target and exercised there under Miri.
+The trusted contracts still need independent review. The concrete
+comparison results are tested on the pinned nightly.
+
 ## Complete constructor replay
 
 Install the AArch64 target libraries for both pinned Rust toolchains. The
