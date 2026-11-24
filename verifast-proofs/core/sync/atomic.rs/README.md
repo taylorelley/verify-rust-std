@@ -1,7 +1,36 @@
-# Challenge 7 Boolean verification
+# Challenge 7 atomic verification
 
-This branch starts the current-source proof of `AtomicBool::from_ptr` and ordinary
-`AtomicBool::load` and `AtomicBool::store`. The runtime implementation remains the challenge fork's.
+The replay covers constructors and ordinary atomic operations for the
+pinned Challenge 7 source on Linux x86-64 and AArch64. The verifier
+checks generated specializations and compares them with the fork's Rust
+implementation. Runtime clients exercise the pinned standard library.
+
+## Full replay in CI
+
+The `VeriFast Challenge 7` workflow builds the patched verifier and
+runs the local proof matrix, native clients and Miri clients. It uploads
+the evidence directory on success or failure. The existing VeriFast
+workflow continues to run the upstream standard library checks.
+
+To run the same job on Linux x86-64, install the pinned toolchains and
+call the replay script with a new work directory.
+
+```sh
+proof=verifast-proofs/core/sync/atomic.rs
+rustup toolchain install nightly-2026-09-25 --profile minimal \
+  --component rustc-dev,rust-src --target aarch64-unknown-linux-gnu
+rustup toolchain install nightly-2026-11-19 --profile minimal \
+  --component rust-src,miri --target aarch64-unknown-linux-gnu
+bash "$proof/replay-challenge-7.sh" /tmp/challenge-7-clean-replay
+```
+
+You can pass an optional second argument with the three VeriFast
+archives. The build verifies the same SHA-256 digests for local and
+downloaded archives. The replay writes build logs, verifier traces,
+compiled dispatch, target coverage, and native and Miri results to
+`evidence/` under the work directory. A successful run writes
+`evidence/result.log`. A failed step exits with its status and leaves
+the logs in place.
 
 ## Historical result
 

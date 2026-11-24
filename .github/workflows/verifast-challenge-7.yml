@@ -1,0 +1,51 @@
+name: VeriFast Challenge 7
+
+on:
+  workflow_dispatch:
+  merge_group:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'library/core/**'
+      - 'rust-toolchain.toml'
+      - 'verifast-proofs/core/sync/atomic.rs/**'
+      - '.github/workflows/verifast-challenge-7.yml'
+  push:
+    branches:
+      - main
+      - 'supercritical/challenge-7'
+    paths:
+      - 'library/core/**'
+      - 'rust-toolchain.toml'
+      - 'verifast-proofs/core/sync/atomic.rs/**'
+      - '.github/workflows/verifast-challenge-7.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  challenge-7:
+    name: Replay atomic safety proofs and clients
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out Rust and the proof suite
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchains
+        run: |
+          rustup toolchain install nightly-2026-09-25 --profile minimal --component rustc-dev,rust-src --target aarch64-unknown-linux-gnu
+          rustup toolchain install nightly-2026-11-19 --profile minimal --component rust-src,miri --target aarch64-unknown-linux-gnu
+
+      - name: Build VeriFast and replay Challenge 7
+        run: bash verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh "$RUNNER_TEMP/challenge-7"
+
+      - name: Upload proof and test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: challenge-7-evidence
+          path: ${{ runner.temp }}/challenge-7/evidence
+          if-no-files-found: warn

@@ -41,7 +41,9 @@
     "verifast-proofs/core/sync/atomic.rs/bitwise-client.rs",
     "verifast-proofs/core/sync/atomic.rs/extrema-client.rs",
     "verifast-proofs/core/sync/atomic.rs/check-integer-access.py",
-    "verifast-proofs/core/sync/atomic.rs/integer-access-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/integer-access-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh",
+    ".github/workflows/verifast-challenge-7.yml"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -121,6 +123,15 @@
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "CLEAN-REPLAY": {
+      "source": "Challenge 7 general solution requirements",
+      "behavior": "The proof and runtime matrix replays from pinned tools and records the evidence even if a check fails.",
+      "implementation": [
+        "verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh",
+        "verifast-proofs/core/sync/atomic.rs/build-store-verifast.sh",
+        ".github/workflows/verifast-challenge-7.yml"
       ]
     }
   },
@@ -375,6 +386,18 @@
       "requirement": "INTEGER-ACCESS-SAFETY",
       "method": "test",
       "criterion": "Exercise boundary values and all load and store orderings with native tests and Miri on both proof targets.",
+      "independent": true
+    },
+    "CLEAN-LOCAL-REPLAY": {
+      "requirement": "CLEAN-REPLAY",
+      "method": "test",
+      "criterion": "A fresh verifier build and the complete matrix finish with no proof or test failures.",
+      "independent": true
+    },
+    "HOSTED-CI-REPLAY": {
+      "requirement": "CLEAN-REPLAY",
+      "method": "test",
+      "criterion": "The hosted GitHub Actions job finishes successfully and publishes the evidence artifact for the candidate commit.",
       "independent": true
     }
   },
