@@ -51,7 +51,10 @@
     "verifast-proofs/core/sync/atomic.rs/check-scope-counter.py",
     "verifast-proofs/core/sync/atomic.rs/scope-lifecycle-client.rs",
     "library/alloc/src/rcs/arc.rs",
-    "verifast-proofs/core/sync/atomic.rs/check-scope-composition.py"
+    "verifast-proofs/core/sync/atomic.rs/check-scope-composition.py",
+    "verifast-proofs/core/sync/atomic.rs/check-generic-helpers.py",
+    "verifast-proofs/core/sync/atomic.rs/supplementary-scoped-threads.md",
+    "verifast-proofs/core/sync/atomic.rs/verifast-upstream.md"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -149,6 +152,14 @@
         "library/std/src/thread/scoped.rs",
         "library/std/src/thread/lifecycle.rs",
         "library/alloc/src/rcs/arc.rs"
+      ]
+    },
+    "GENERIC-HELPER-SAFETY": {
+      "source": "Challenge 7 Part 2, including the optional panic contracts",
+      "behavior": "The 15 generic unsafe helpers, copied verbatim from the atomic module, satisfy parametric slot-permission contracts and cannot unwind once the invalid orderings are excluded.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
       ]
     }
   },

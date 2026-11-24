@@ -18,15 +18,26 @@ download() {
     echo "$digest  $file" | sha256sum --check --strict
 }
 
-download source.tgz https://api.github.com/repos/verifast/verifast/tarball/26.10 \
-    8059ea1041685da2d2da52f720a28c22b0f13b963f38a02abdfff5ed51673493
+source_commit=f76012fb518703b1d98e243ac4f487f16877cfcb # tag 26.10
+if [[ -n $archives && -f $archives/source.tgz ]] || \
+    curl --fail --location --retry 2 --output source.tgz \
+        https://api.github.com/repos/verifast/verifast/tarball/26.10; then
+    [[ -f source.tgz ]] || cp -- "$archives/source.tgz" source.tgz
+    echo "8059ea1041685da2d2da52f720a28c22b0f13b963f38a02abdfff5ed51673493  source.tgz" |
+        sha256sum --check --strict
+    mkdir source
+    tar -xzf source.tgz -C source --strip-components=1
+else
+    # Some networks block the tarball endpoint. Fall back to the tagged commit.
+    git clone --quiet --depth 1 --branch 26.10 https://github.com/verifast/verifast source
+    [[ $(git -C source rev-parse HEAD) == "$source_commit" ]] ||
+        { echo "VeriFast tag 26.10 does not name commit $source_commit" >&2; exit 1; }
+fi
 download deps.txz https://github.com/verifast/vfdeps/releases/download/25.01/vfdeps-adf88dc-linux.txz \
     8d022c93d51a1d13ec1e782d767c60462405f6865d5ee416f82d6234e93ee580
 download runtime.tgz https://github.com/verifast/verifast/releases/download/26.10/verifast-26.10-linux.tar.gz \
     5ad2a65997457fd5996a27f93107ef7e52c90c0d12b63b6e67f7acbc73e90efd
 
-mkdir source
-tar -xzf source.tgz -C source --strip-components=1
 tar -xjf deps.txz
 tar -xzf runtime.tgz
 
