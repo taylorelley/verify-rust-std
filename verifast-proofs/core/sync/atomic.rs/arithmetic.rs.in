@@ -1,0 +1,46 @@
+    pub ${CONST}fn $METHOD<'a>(&'a self, val: $DELTA, order: Ordering) -> $SLOT
+    //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<$ATOMIC>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
+    //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    //@ on_unwind_ens false;
+    {
+        unsafe {
+            //@ leak <Ordering>.own(_, _);
+            //@ close exists::<*$ATOMIC>(self);
+            //@ close exists::<lifetime_t>('a);
+            atomic_$OP(self.v.get().cast::<$SLOT>(), val, order)
+        }
+    }
+// ELEMENT METHOD
+    pub fn fetch_ptr_$OP<'a>(&'a self, val: usize, order: Ordering) -> *mut Pointee
+    //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<AtomicPtr>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
+    //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    //@ on_unwind_ens false;
+    {
+        let bytes = val.wrapping_mul(size_of::<Pointee>());
+        unsafe {
+            //@ leak <Ordering>.own(_, _);
+            //@ close exists::<*AtomicPtr>(self);
+            //@ close exists::<lifetime_t>('a);
+            atomic_$OP(self.v.get().cast::<*mut Pointee>(), bytes, order)
+        }
+    }
+// HELPER
+const unsafe fn atomic_$OP(dst: *mut $SLOT, val: $DELTA, order: Ordering) -> $SLOT
+//@ req thread_token(currentThread) &*& exists::<*$ATOMIC>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]${ATOMIC}_share(k, currentThread, atomic) &*& dst == ref_origin(atomic) as *$SLOT;
+//@ ens thread_token(currentThread) &*& [q]lifetime_token(k);
+//@ on_unwind_ens false;
+{
+    //@ open exists::<*$ATOMIC>(atomic);
+    //@ open exists::<lifetime_t>(k);
+    //@ open ${ATOMIC}_share(k, currentThread, atomic);
+    //@ open_frac_borrow(k, own_atomic_contents(dst), q);
+    //@ open [?f]own_atomic_contents(dst)();
+    let old = unsafe {
+        match order {
+$BRANCHES
+        }
+    };
+    //@ close [f]own_atomic_contents(dst)();
+    //@ close_frac_borrow(f, own_atomic_contents(dst));
+    old
+}

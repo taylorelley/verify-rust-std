@@ -1,6 +1,6 @@
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,83 @@
+@@ -1456,6 +1456,110 @@
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
@@ -79,12 +79,39 @@
 +                Some ("std::intrinsics::" ^ operation ^ "_safety", [operand])
 +            | _ -> reject "unsupported success or failure ordering")
 +        | _ -> reject "expected a concrete integer or thin pointer and two orderings")
++    | ("core::intrinsics::atomic_xadd" | "std::intrinsics::atomic_xadd" |
++       "core::intrinsics::atomic_xsub" | "std::intrinsics::atomic_xsub") as name ->
++        let operation = if Filename.check_suffix name "atomic_xadd" then "atomic_xadd" else "atomic_xsub" in
++        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
++        (match fn_ty.substs with
++        | [({kind = Type {kind = slot_ty}} as slot);
++           ({kind = Type {kind = delta_ty}} as delta);
++           {kind = Const {kind = Value {
++              ty = {kind = Adt {
++                id = {name = ("core::intrinsics::AtomicOrdering" |
++                              "std::intrinsics::AtomicOrdering")};
++                kind = EnumKind; substs = [];
++              }};
++              val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++                val_tree = Leaf {data = order; size = 4}}}];
++            }}}] when fn_ty.late_bound_generic_param_count = 0 ->
++            (match slot_ty, delta_ty with
++            | Int slot, Int delta when slot = delta -> ()
++            | UInt slot, UInt delta when slot = delta -> ()
++            | RawPtr {is_thin = true; _}, UInt USize -> ()
++            | _ -> reject "expected matching integer operands or a concrete thin pointer with a usize delta");
++            (match Stdint.Uint128.to_string (DecoderAux.uint128_get order) with
++            | "0" | "1" | "2" | "3" | "4" ->
++                (* Each ordering uses the same storage-safety contract. *)
++                Some ("std::intrinsics::" ^ operation ^ "_safety", [slot; delta])
++            | _ -> reject "unsupported arithmetic ordering")
++        | _ -> reject "expected two concrete operand types and a concrete AtomicOrdering")
 +    | _ -> None
 +
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2463,17 @@
+@@ -2386,17 +2490,17 @@
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -112,7 +139,7 @@
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6355,14 @@
+@@ -6278,7 +6382,14 @@
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -128,7 +155,7 @@
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7720,8 @@
+@@ -7636,8 +7747,8 @@
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -141,7 +168,21 @@
  
 --- a/bin/rust/std/lib.rsspec
 +++ b/bin/rust/std/lib.rsspec
-@@ -327,6 +327,50 @@
+@@ -146,6 +146,13 @@
+         //@ ens true;
+         //@ on_unwind_ens false;
+         
++    }
++
++    impl usize {
++        fn wrapping_mul(self: usize, other: usize) -> usize;
++        //@ req true;
++        //@ ens true;
++        //@ on_unwind_ens false;
+     }
+ 
+     /*@
+@@ -327,6 +334,50 @@
          req true;
          ens atomic_align_of::<u8>() == 1;
      
@@ -192,7 +233,7 @@
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +402,62 @@
+@@ -358,6 +409,76 @@
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      
@@ -250,6 +291,20 @@
 +    unsafe fn atomic_cxchgweak_safety<T>(dst: *mut T, old: T, new: T) -> (T, bool);
 +    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(old) == true &*& valid(new) == true;
 +    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result.0) == true;
++    //@ on_unwind_ens false;
++
++    //@ fix atomic_value_allowed<T>(allowed: bool, value: T) -> bool { allowed }
++
++    // Arithmetic is closed over the supported slot types. It may break
++    // a narrower invariant, such as a byte restricted to 0 and 1.
++    unsafe fn atomic_xadd_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xsub_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
 +    //@ on_unwind_ens false;
 +
  }

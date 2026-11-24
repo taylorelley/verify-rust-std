@@ -311,6 +311,47 @@ provide the evidence about strong versus weak behavior. A formal model
 of synchronization and pointer provenance, and independent review of the
 trusted contracts, remain open.
 
+## Atomic addition and subtraction
+
+Use the rebuilt verifier, pinned compiler and AArch64 target libraries
+from the exchange replay.
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-arithmetic.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-arithmetic
+"$rustc_path" --edition=2024 --test "$proof/arithmetic-client.rs" \
+  -o /tmp/challenge-7-arithmetic-client
+/tmp/challenge-7-arithmetic-client
+```
+
+The proof covers signed and unsigned integers, including pointer-width
+integers, and `AtomicPtr` at pointee sizes 0, 1, 2, 3 and 4. Pointer
+methods cover both byte and element offsets. For the element methods, the
+specialization inlines the byte wrapper after wrapping multiplication.
+The source comparison checks this inlining on every size and detects a
+changed element scale. It also detects changes to arithmetic opcodes
+and orderings. A successful replay writes `coverage.json`.
+
+The primitive contracts require full byte permission and an invariant
+that admits every value of the slot type. Arithmetic on a slot with a
+narrower invariant, such as a byte restricted to 0 and 1, is outside that
+contract. The verifier rejects narrower invariants, fractional write
+permission and a non-`usize` delta for a pointer.
+
+The native and Miri clients compare integer results against wrapping
+arithmetic at the type limits. Pointer tests cover wraparound addresses
+and dereference restored live pointers. Use `arithmetic-client.rs` as
+`src/lib.rs` in the Miri procedure above. Run the default target and
+`--target aarch64-unknown-linux-gnu` to cover the 128-bit integer cases.
+
+The proofs cover storage safety under trusted primitive contracts. The
+exact arithmetic results and pointer provenance are checked by concrete
+tests. The formal contracts and source comparison still need independent
+review.
+
 ## Complete constructor replay
 
 Install the AArch64 target libraries for both pinned Rust toolchains. The

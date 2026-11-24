@@ -34,7 +34,10 @@
     "verifast-proofs/core/sync/atomic.rs/swap-client.rs",
     "verifast-proofs/core/sync/atomic.rs/check-compare-exchange.py",
     "verifast-proofs/core/sync/atomic.rs/compare-exchange.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/compare-exchange-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/compare-exchange-client.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-arithmetic.py",
+    "verifast-proofs/core/sync/atomic.rs/arithmetic.rs.in",
+    "verifast-proofs/core/sync/atomic.rs/arithmetic-client.rs"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -79,6 +82,14 @@
     "COMPARE-EXCHANGE-SAFETY": {
       "source": "Challenge 7 Parts 2 and 3",
       "behavior": "Strong and weak compare-exchange preserve slot validity and lifetime under full atomic byte permissions, including valid storage on unwind for invalid failure orderings.",
+      "implementation": [
+        "library/core/src/sync/atomic.rs",
+        "library/core/src/intrinsics/mod.rs"
+      ]
+    },
+    "ARITHMETIC-SAFETY": {
+      "source": "Challenge 7 Parts 2 and 3",
+      "behavior": "Addition and subtraction preserve live aligned storage under full atomic byte permission for the supported integer and thin pointer types.",
       "implementation": [
         "library/core/src/sync/atomic.rs",
         "library/core/src/intrinsics/mod.rs"
@@ -264,6 +275,24 @@
       "requirement": "COMPARE-EXCHANGE-SAFETY",
       "method": "test",
       "criterion": "Exercise the success, mismatch, invalid ordering and spurious failure paths with native and Miri clients",
+      "independent": true
+    },
+    "ARITHMETIC-PERMISSIONS": {
+      "requirement": "ARITHMETIC-SAFETY",
+      "method": "proof",
+      "criterion": "Verify all five orderings for both operations across the integer and pointer matrix. Reject fractional write permission, restricted value invariants and the wrong pointer delta type.",
+      "independent": true
+    },
+    "ARITHMETIC-SOURCE": {
+      "requirement": "ARITHMETIC-SAFETY",
+      "method": "test",
+      "criterion": "Match compiled arithmetic and all five orderings against the pinned source. Detect a changed opcode, ordering and pointer element scale.",
+      "independent": true
+    },
+    "ARITHMETIC-CLIENT": {
+      "requirement": "ARITHMETIC-SAFETY",
+      "method": "test",
+      "criterion": "Check previous values, wrapping integer limits, pointer address wraparound and restored live pointer dereferences with native and Miri clients.",
       "independent": true
     }
   },
