@@ -49,7 +49,9 @@
     "library/std/src/thread/scoped.rs",
     "library/std/src/thread/lifecycle.rs",
     "verifast-proofs/core/sync/atomic.rs/check-scope-counter.py",
-    "verifast-proofs/core/sync/atomic.rs/scope-lifecycle-client.rs"
+    "verifast-proofs/core/sync/atomic.rs/scope-lifecycle-client.rs",
+    "library/alloc/src/rcs/arc.rs",
+    "verifast-proofs/core/sync/atomic.rs/check-scope-composition.py"
   ],
   "requirements": {
     "BOOL-SAFETY": {
@@ -145,7 +147,8 @@
       "behavior": "Track scope reservations and worker retirement, and check that the real scoped API waits for borrowed worker state to finish on successful and panic paths.",
       "implementation": [
         "library/std/src/thread/scoped.rs",
-        "library/std/src/thread/lifecycle.rs"
+        "library/std/src/thread/lifecycle.rs",
+        "library/alloc/src/rcs/arc.rs"
       ]
     }
   },
@@ -436,6 +439,18 @@
       "requirement": "SCOPED-LIFECYCLE-EVIDENCE",
       "method": "test",
       "criterion": "Exercise nested join, scope unwind, worker panic with and without explicit join, and implicit join of a destructor that holds a borrow.",
+      "independent": true
+    },
+    "SCOPE-PACKET-AND-ORDER-MODEL": {
+      "requirement": "SCOPED-LIFECYCLE-EVIDENCE",
+      "method": "proof",
+      "criterion": "Check the normal two-owner packet model and the conditions for an Acquire exit load to observe worker retirement.",
+      "independent": true
+    },
+    "SCOPE-CAPACITY-REFINEMENT": {
+      "requirement": "SCOPED-LIFECYCLE-EVIDENCE",
+      "method": "proof",
+      "criterion": "Prove that each counted packet obligation corresponds to a distinct live allocation and that the source cannot reach the overflow unwind accounting path on covered targets.",
       "independent": true
     }
   },

@@ -101,6 +101,44 @@ methods. Native Rust and Miri check nested borrowing and joining, the
 scope callback unwinding, worker panic propagation and consumption,
 and waiting for a borrowed result's destructor after dropping the handle.
 
+## Packet ownership, publication and the overflow case
+
+The normal-path packet model in `check-scope-composition.py` checks both
+drop orders and the explicit join route. It also models a failed launch
+dropping both packet owners. The model assumes that `Arc` runs
+`Packet::drop` exactly once when the last strong owner releases it and that
+native join completes before the explicit join reads the packet. It checks
+that a published result is taken or destroyed before the modeled retirement.
+A mutation that retires when the parent drops its handle while the worker
+still holds the packet is rejected.
+
+The counter is modified using atomic read-modify-write operations after
+initialization. For an Acquire exit load that reads the final modification,
+each preceding Release decrement in the unbroken sequence synchronizes
+with the load. Write-read coherence prevents that load from reading the
+initial zero if a root reservation happens before it. The queries use
+these memory-model rules as premises and include controls for Relaxed
+loads, Relaxed decrements and an intervening non-RMW store.
+[Rust atomic memory model](https://doc.rust-lang.org/std/sync/atomic/index.html#memory-model-for-atomic-accesses) · [C++ release sequences and coherence](https://eel.is/c++draft/intro.races) · [C++ atomic ordering](https://eel.is/c++draft/atomics.order)
+
+One accounting case still needs a source proof. In `spawn_unchecked`, the
+packet and both owners exist before the counter increment. If the admission
+cutoff is exceeded, `overflow` compensates for the increment and panics.
+With unwinding, the packet can then reach its destructor before any native
+thread starts, and the destructor contains a second decrement. The Z3
+control checks that this conditional sequence would leave the count one
+below its starting value. The check establishes the accounting consequence
+under its premise. Reachability on a supported target is open.
+
+A sufficient capacity bound follows if every counted obligation maps to
+a distinct, live, word-aligned packet allocation. The model checks that
+the number of available aligned addresses is below the admission cutoff
+for both word widths. The pinned `ArcInner` has two atomic counts and
+`Arc::new` allocates the inner value in a box. A source proof still needs
+to establish the allocation-to-obligation mapping and show it remains valid
+across reservation, launch, retirement, and unwind. Track that proof
+separately from the abstract arithmetic bound.
+
 ## Review status
 
 This guide is an author audit. Independent review of the trusted contracts

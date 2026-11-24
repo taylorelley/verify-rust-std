@@ -8,6 +8,7 @@ on:
     paths:
       - 'library/core/**'
       - 'library/std/src/thread/**'
+      - 'library/alloc/src/rcs/arc.rs'
       - 'rust-toolchain.toml'
       - 'verifast-proofs/core/sync/atomic.rs/**'
       - '.github/workflows/verifast-challenge-7.yml'
@@ -18,6 +19,7 @@ on:
     paths:
       - 'library/core/**'
       - 'library/std/src/thread/**'
+      - 'library/alloc/src/rcs/arc.rs'
       - 'rust-toolchain.toml'
       - 'verifast-proofs/core/sync/atomic.rs/**'
       - '.github/workflows/verifast-challenge-7.yml'

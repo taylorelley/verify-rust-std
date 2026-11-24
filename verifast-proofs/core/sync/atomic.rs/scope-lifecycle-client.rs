@@ -73,3 +73,13 @@ fn implicit_join_waits_for_borrowed_result_destructor() {
     });
     assert!(dropped);
 }
+
+#[test]
+fn implicit_join_publishes_both_workers_writes() {
+    let [mut left, mut right] = [0, 0];
+    thread::scope(|scope| {
+        drop(scope.spawn(|| left = 11));
+        drop(scope.spawn(|| right = 29));
+    });
+    assert_eq!((left, right), (11, 29));
+}
