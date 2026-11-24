@@ -16,6 +16,7 @@ on:
     branches:
       - main
       - 'supercritical/challenge-7'
+      - 'claude/challenge-7-**'
     paths:
       - 'library/core/**'
       - 'library/std/src/thread/**'
@@ -41,7 +42,8 @@ jobs:
       - name: Install pinned Rust toolchains
         run: |
           rustup toolchain install nightly-2026-09-25 --profile minimal --component rustc-dev,rust-src --target aarch64-unknown-linux-gnu
-          rustup toolchain install nightly-2026-11-19 --profile minimal --component rust-src,miri --target aarch64-unknown-linux-gnu
+          source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$source_nightly" --profile minimal --component rust-src,miri --target aarch64-unknown-linux-gnu
 
       - name: Build VeriFast and replay Challenge 7
         run: bash verifast-proofs/core/sync/atomic.rs/replay-challenge-7.sh "$RUNNER_TEMP/challenge-7"

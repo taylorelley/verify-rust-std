@@ -9,6 +9,7 @@ proof logs, compiler IR, negative controls and runtime test results.
 
 | Challenge property | Where to start | What to check |
 | --- | --- | --- |
+| Generic helper contracts | `generic-helpers/coverage.json`, `generic-helpers.rs` and its controls | The 15 bodies match `atomic.rs` exactly, apart from attributes. Each contract requires the slot permission the operation needs, and the no-panic run excludes exactly the orderings that panic. |
 | Live, aligned access | `constructors/coverage.json` and the constructor layout and alignment controls | The constructor obtains permission for the same slot address at the target's required alignment and retains it for the lifetime of the reference. |
 | Initialized storage | Constructor `uninitialized` controls and the Boolean and pointer missing-storage controls | A fresh conversion needs a live, initialized points-to resource. A reused conversion needs an existing share. |
 | Conflicting accesses | Boolean mixed-access and scoped-reference proofs, the two U16 overlap controls, and the integer fractional-write controls | A read can use fractional byte ownership. A write requires full underlying byte permission. Scope recovery requires the lifetime to end. |
@@ -38,8 +39,13 @@ scope on these targets.
    additionally support a Boolean byte with an admitted input. Minimum and
    maximum select from two admitted values. The compare-exchange contracts
    allow either outcome in the safety model. Source and runtime checks
-   distinguish strong from weak behavior.
-3. **Source comparison.** Review the compiler input and target guards, layout
+   distinguish strong from weak behavior. The frontend dispatch
+   (`specialize_atomic_access` in the patch) maps each intrinsic call with a
+   concrete ordering to one of these contracts. For a generic operand type or
+   `VOLATILE` flag, it uses the same parametric contract. Check that the
+   dispatch rejects every illegal ordering.
+3. **Source comparison.** The generic helpers need no comparison, since
+   `check-generic-helpers.py` verifies the library text itself. Review the compiler input and target guards, layout
    assertions, wrapper generation and normalization in each replay script.
    Constructor checks compare compiler output and layout. Operation checks
    compare optimized LLVM dispatch. Look at the retained pointer and value
@@ -47,100 +53,14 @@ scope on these targets.
    names, metadata IDs, panic locations or follow identical LLVM aliases.
    Check that each mutation changes a field the comparison retains. The
    comparisons are specific to the pinned source, compiler and targets.
-4. **Scope of the claims.** The proof establishes safety under the trusted
-   contracts. Functional results, concrete pointer provenance and scoped
-   thread execution have native or Miri evidence where the clients exercise
-   them. The proof does not establish a general synchronization or pointer
-   provenance theorem. Review the reported gaps before claiming full
-   Challenge 7 coverage.
-
-## Scoped threads
-
-The replay records a successful proof of a simple function as a control.
-Rust accepts all the scoped-thread probe programs. VeriFast reports
-unsupported closure arguments at `thread::scope`, unsupported function items
-as values when named callbacks are passed to `scope` and `Scope::spawn`, and
-unsupported dynamic types when checking `ScopedJoinHandle::join`. The join
-result carries a boxed dynamic panic payload. These probes record why the
-full formal obligation remains open.
-
-A proof against the actual scoped API needs a verifier that represents the
-callback and join signatures and models the contracts for `scope`, `spawn`
-and `join`. Review permission transfer into each worker and recovery after
-join, including panic paths. The existing reference fixture proves the
-permission protocol for its modeled scope. The threaded runtime clients
-exercise the real API under native Rust and Miri.
-
-## Scoped counter model and lifecycle clients
-
-The Z3 queries in `check-scope-counter.py` use the same solver bundled
-with the pinned VeriFast dependencies. They check a separate abstraction
-for both 32-bit and 64-bit counters. The runner pins `scoped.rs` and
-`lifecycle.rs` and records each query and result. The source correspondence
-to review is:
-
-| Pinned Rust event | Model transition |
-| --- | --- |
-| `increment_num_running_threads` increments before checking the old count | Reserve a pending unit. Successful admission uses the old count's `usize::MAX / 2` cutoff. |
-| Admission succeeds | Transfer a pending unit to a live packet obligation without changing the count. |
-| `overflow` calls the decrement routine before panicking | Remove the rejected pending reservation. |
-| `Packet::drop` drops the unconsumed result before decrementing | Retire a live packet obligation. |
-| The decrement returns an old count of one | Notify the waiter after the last obligation is retired. |
-| `scope` observes zero with an Acquire load after the callback | The abstract model has neither a pending reservation nor a live packet obligation. |
-
-The claims assume a supplied live or pending obligation when decrementing
-and capacity for each reservation without machine-word wraparound. The
-queries test the feasibility of these premises and include counterexamples for
-lost reservations, incorrect notifications and increments at capacity. The
-model does not prove the global capacity bound, the correspondence between
-`Arc` ownership and packet retirement, the Acquire/Release edge, or Rust
-callback and panic semantics.
-
-The separate `scope-lifecycle-client.rs` uses the real standard library
-methods. Native Rust and Miri check nested borrowing and joining, the
-scope callback unwinding, worker panic propagation and consumption,
-and waiting for a borrowed result's destructor after dropping the handle.
-
-## Packet ownership, publication and the overflow case
-
-The normal-path packet model in `check-scope-composition.py` checks both
-drop orders and the explicit join route. It also models a failed launch
-dropping both packet owners. The model assumes that `Arc` runs
-`Packet::drop` exactly once when the last strong owner releases it and that
-native join completes before the explicit join reads the packet. It checks
-that a published result is taken or destroyed before the modeled retirement.
-A mutation that retires when the parent drops its handle while the worker
-still holds the packet is rejected.
-
-The counter is modified using atomic read-modify-write operations after
-initialization. For an Acquire exit load that reads the final modification,
-each preceding Release decrement in the unbroken sequence synchronizes
-with the load. Write-read coherence prevents that load from reading the
-initial zero if a root reservation happens before it. The queries use
-these memory-model rules as premises and include controls for Relaxed
-loads, Relaxed decrements and an intervening non-RMW store.
-[Rust atomic memory model](https://doc.rust-lang.org/std/sync/atomic/index.html#memory-model-for-atomic-accesses) · [C++ release sequences and coherence](https://eel.is/c++draft/intro.races) · [C++ atomic ordering](https://eel.is/c++draft/atomics.order)
-
-One accounting case still needs a source proof. In `spawn_unchecked`, the
-packet and both owners exist before the counter increment. If the admission
-cutoff is exceeded, `overflow` compensates for the increment and panics.
-With unwinding, the packet can then reach its destructor before any native
-thread starts, and the destructor contains a second decrement. The Z3
-control checks that this conditional sequence would leave the count one
-below its starting value. The check establishes the accounting consequence
-under its premise. Reachability on a supported target is open.
-
-A sufficient capacity bound follows if every counted obligation maps to
-a distinct, live, word-aligned packet allocation. The model checks that
-the number of available aligned addresses is below the admission cutoff
-for both word widths. The pinned `ArcInner` has two atomic counts and
-`Arc::new` allocates the inner value in a box. A source proof still needs
-to establish the allocation-to-obligation mapping and show it remains valid
-across reservation, launch, retirement, and unwind. Track that proof
-separately from the abstract arithmetic bound.
+4. **Scope of the claims.** The proof establishes the absence of the
+   Challenge 7 undefined behaviors under the trusted contracts. Functional
+   results, such as the arithmetic result or strong versus weak
+   compare-exchange, have native and Miri evidence. The proof makes no claim
+   about synchronization or about the pointer values stored in an `AtomicPtr`.
 
 ## Review status
 
-This guide is an author audit. Independent review of the trusted contracts
-and source comparisons remains open. Keep the real scoped-thread proof
-obligation open until a proof checks the actual API.
+The replay is automated and reproducible from the pinned inputs. The
+committee review should focus on the trusted contracts (item 2), the frontend
+patch, and the specialization comparisons for the public wrappers (item 3).

@@ -1,52 +1,136 @@
 # Challenge 7 atomic verification
 
-The replay covers constructors and ordinary atomic operations for the
-pinned Challenge 7 source on Linux x86-64 and AArch64. The verifier
-checks generated specializations and compares them with the fork's Rust
-implementation. Runtime clients exercise the pinned standard library.
+This directory verifies the safety of `core::sync::atomic` for
+[Challenge 7](../../../../doc/src/challenges/0007-atomic-types.md) with
+VeriFast. The proofs run on the fork's `library/core/src/sync/atomic.rs`
+for Linux x86-64, and for AArch64 Linux in the 128-bit cases.
+
+## What is proved
+
+| Challenge 7 item | Proof step | Evidence |
+| --- | --- | --- |
+| Part 1: the 12 `from_ptr` constructors | `constructors` | Each constructor needs a live, initialized slot with the atomic alignment of its type, and holds it for the reference lifetime. All slot values are symbolic. `AtomicPtr` uses pointee sizes 0, 1, 2, 3 and 4 with an unrestricted pointer value. |
+| Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `generic-helpers` | The generic bodies are copied verbatim from the library at replay time and verified against one contract per helper. |
+| Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The public wrappers unwind on invalid orderings with every resource intact. |
+| Part 3: intrinsic contracts | `verifast-26.10-u8-store.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
+| Public methods and instantiations | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | Every public wrapper on `AtomicBool`, all integer widths and `AtomicPtr` at five pointee sizes, connected to the library by compiled MIR and LLVM comparison. |
+
+The listed undefined behaviors are excluded as follows:
+
+* **Data races.** An atomic slot permission rules out non-atomic and mixed-size
+  writes to the slot. A read needs only a fraction of the permission, and a
+  write needs all of it. VeriFast checks these fractions through the
+  primitive contracts.
+* **Dangling or misaligned access.** The slot permission can only be created
+  from a live points-to resource whose address is aligned for atomic access
+  at the slot type.
+* **Uninitialized reads.** Creating the permission needs an initialized value.
+* **Invalid values.** Each slot carries a value invariant, for example 0 or 1
+  for `AtomicBool`. Stores, exchanges and compare-exchange require operands
+  that satisfy it. Arithmetic and bitwise operations need an unrestricted slot,
+  except for the Boolean AND, OR and XOR paths.
+* **Intrinsic UB.** The frontend admits only legal orderings and supported
+  operand types at intrinsic calls, so illegal orderings fail to verify.
+
+## Trusted base
+
+1. The intrinsic contracts and atomic permission lemmas in the VeriFast patch.
+   They are the specifications of compiler primitives, so they cannot be proved
+   in Rust.
+2. The patched VeriFast frontend, which decodes const-generic `AtomicOrdering`
+   arguments and exports ABI alignment for concrete structs. The patch applies
+   to VeriFast 26.10 and to the current master. Once a VeriFast release includes
+   it, the repository's pinned release can replace it. See
+   [`verifast-upstream.md`](verifast-upstream.md).
+3. The per-type wrapper proofs: a specialized copy of each public wrapper is
+   verified, then compared with the compiled library code by the replay
+   scripts. The generic helper proof uses the library text directly and needs
+   no comparison.
+
+[`review-guide.md`](review-guide.md) maps each claim to its evidence and lists
+the checks a reviewer should repeat.
 
 ## Full replay in CI
 
 The `VeriFast Challenge 7` workflow builds the patched verifier and
-runs the local proof matrix, native clients and Miri clients. It uploads
+runs the proof matrix, native clients and Miri clients. It uploads
 the evidence directory on success or failure. The existing VeriFast
 workflow continues to run the upstream standard library checks.
 
-To run the same job on Linux x86-64, install the pinned toolchains and
-call the replay script with a new work directory.
+To run the same job on Linux x86-64, install the toolchains and call the
+replay script with a new work directory. The source nightly is the channel
+in `rust-toolchain.toml`. The verifier nightly is the one VeriFast 26.10
+is built for.
 
 ```sh
 proof=verifast-proofs/core/sync/atomic.rs
+source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
 rustup toolchain install nightly-2026-09-25 --profile minimal \
   --component rustc-dev,rust-src --target aarch64-unknown-linux-gnu
-rustup toolchain install nightly-2026-11-19 --profile minimal \
+rustup toolchain install "$source_nightly" --profile minimal \
   --component rust-src,miri --target aarch64-unknown-linux-gnu
 bash "$proof/replay-challenge-7.sh" /tmp/challenge-7-clean-replay
 ```
 
 You can pass an optional second argument with the three VeriFast
 archives. The build verifies the same SHA-256 digests for local and
-downloaded archives. The replay writes build logs, verifier traces,
-compiled dispatch, target coverage, and native and Miri results to
-`evidence/` under the work directory. A successful run writes
-`evidence/result.log`. A failed step exits with its status and leaves
-the logs in place.
+downloaded archives. If the source tarball endpoint is unreachable, the
+build clones the 26.10 tag and checks its commit. The replay writes build
+logs, verifier traces, compiled dispatch, target coverage, and native and
+Miri results to `evidence/` under the work directory. A successful run
+writes `evidence/result.log`. A failed step exits with its status and
+leaves the logs in place.
 
-The [proof review guide](review-guide.md) maps the Challenge 7 safety
-claims to the evidence and lists the trusted assumptions. The `scoped-thread-boundary`
-step records expected VeriFast frontend limitations beside a positive
-verifier control.
+The proofs are not tied to a hash of the atomic module. Each step either
+copies the library code directly or compares compiled library code with the
+verified copy. A toolchain update therefore fails only if it changes
+verified behavior. Intrinsic declarations remain pinned by excerpt, so any
+change to them forces a review of the trusted contracts.
 
-## Historical result
+The `scoped-thread-boundary`, `scoped-counter` and `scoped-composition`
+steps check the threaded test clients. They are not part of the Challenge 7
+claim. See [`supplementary-scoped-threads.md`](supplementary-scoped-threads.md).
 
-[The ARM64 macOS 15 replay](https://github.com/taylorelley/verify-rust-std/actions/runs/45059674164)
-ran the historical scripts and pinned patched VeriFast build from
-[PR #675](https://github.com/model-checking/verify-rust-std/pull/675).
-The only workflow change was the runner label. The artifact digest was
-`151c8817dc3561a213b4241e7ff8ff7c7214d19b4597fcf8a1a44325c2332458`.
-It reports 14 constructors, including signed and unsigned 128-bit types,
-15 wrappers, 14 caller harnesses, source refinement, and passing controls.
-These results apply to the historical source and primitive model.
+## Generic unsafe helpers
+
+```sh
+rustc_path=$(rustup which rustc)
+RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
+  python3 "$proof/check-generic-helpers.py" \
+  /tmp/challenge-7-verifast-build/verifast-26.10/bin "$rustc_path" \
+  /tmp/challenge-7-generic-helpers
+```
+
+The runner copies the 15 helpers from `atomic.rs`, removes their attributes
+and adds one contract to each. It type-checks the result with the source
+nightly and verifies it. The contracts are generic over `T` (and `U` for the
+operand of arithmetic and bitwise operations), and over `VOLATILE` for load and
+store:
+
+| Helper | Requires | Ensures |
+| --- | --- | --- |
+| `atomic_load` | a read fraction `[f]atomic_points_to(dst, p, valid)` | the same fraction, and `valid(result)` |
+| `atomic_store` | write permission `atomic_points_to(dst, 1, valid)` and `valid(val)` | the permission |
+| `atomic_swap`, `atomic_max`, `atomic_min`, `atomic_umax`, `atomic_umin` | write permission and `valid(val)` | the permission and `valid(result)` |
+| `atomic_compare_exchange`, `atomic_compare_exchange_weak` | write permission, `valid(old)` and `valid(new)` | the permission and a valid value in `Ok` or `Err` |
+| `atomic_add`, `atomic_sub`, `atomic_and`, `atomic_nand`, `atomic_or`, `atomic_xor` | write permission to a slot that admits every value | the permission |
+
+On an invalid ordering, store, load and both compare-exchange helpers unwind
+and return the permission. A second run adds the ordering contract for the
+optional panic requirement. Store excludes `Acquire` and `AcqRel`, load
+excludes `Release` and `AcqRel`, and compare-exchange excludes `Release` and
+`AcqRel` as the failure ordering. With those orderings excluded, VeriFast
+proves `on_unwind_ens false`.
+
+The rejection controls cover a store with only a read fraction, a store,
+exchange or maximum with an invalid value, a store with no permission,
+addition on a restricted slot, the unwinding paths when the ordering contract
+is missing, and a Release load or Acquire store substituted into a helper body.
+
+For `VOLATILE` the generic contract is the ordinary-access contract. It is at
+least as strong as what a volatile access requires. AtomicBool's AND, OR and XOR
+paths use the narrower Boolean invariant, which the generic contract does not
+cover. They are verified in the `bitwise` step instead.
 
 ## Current-source replay
 
@@ -97,8 +181,7 @@ The source comparison pins the fork atomic module and checks size, alignment,
 and field offset on both Rust types. It compares compiler-generated runtime and
 const-evaluation MIR, disregarding debug information and mapping the two names
 of the concrete Boolean atomic type. The comparison rejects an altered pointer
-computation. This is a targeted constructor check for Linux x86-64, pending
-review of the source transfer and trusted model. The constructor part covers a writable atomic share.
+computation. The constructor part covers a writable atomic share.
 The raw-byte read permission checks are described below.
 
 ## Ordinary load and store
@@ -110,7 +193,7 @@ also accepts the other integer widths and thin pointers. Load and store
 each accept three legal orderings with `VOLATILE = false`. Loads preserve
 the supplied read permission and return a value satisfying the slot
 invariant. Stores require full byte permission and an input that satisfies
-the invariant. The compiler's atomic primitive remains trusted.
+the invariant.
 
 To reproduce on Linux x86-64, use Rustup with the two nightlies above.
 
@@ -156,13 +239,8 @@ Acquire in the reference proof. The writable-share constructor and
 load/store proofs still run in the same replay.
 
 The reference fixture checks the two worker obligations and their scope
-lifetime. The native and Miri client uses real scoped threads. Running
-VeriFast 26.10 on `scope-api-probe.rs` demonstrates the gap in the formal
-proof. The front end rejects calls that pass closures, and the shipped
-thread specifications provide no contracts for `scope`, `spawn`, or `join`.
-The proof uses the compiler's atomic operations through the intrinsic
-contracts. Independent review of those contracts and the source
-specialization remains open.
+lifetime. The native and Miri client runs the same pattern with real scoped
+threads.
 
 ## First integer specialization
 
@@ -196,12 +274,6 @@ compiled by the fork's pinned nightly. It checks size, alignment, field
 offset, all emitted atomic orderings and the panic paths. It detects
 mutations to the constructor pointer and a load ordering. This evidence
 is specific to the pinned specialization and target.
-
-The Boolean proof review should check the lifetime-token transfers,
-fractional read permissions, exact intrinsic dispatch, and the compiler
-layout and code-generation assumptions. Neither the proof nor its source
-comparison establishes the correctness of Rust's scoped-thread
-implementation. Independent review of both specializations is pending.
 
 ## Pointer constructor
 
@@ -246,13 +318,12 @@ a volatile load, and a store attempted with only a read fraction. The pointer
 client also dereferences a live pointer after all nine legal store and load
 ordering pairs. To replay the client under Miri, place `ptr-client.rs` in
 `src/lib.rs` in a dependency-free Cargo package with edition 2024. Run
-`cargo +nightly-2026-11-19 miri test --offline` with
+`cargo "+$source_nightly" miri test --offline` with
 `MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-seed=0"`.
 
-The formal claims are limited to storage permissions and the modeled
-lifetime and alignment rules. Pointer provenance and concurrent memory-model
-behavior are outside these claims. The trusted alignment and intrinsic
-contracts and the source comparison still require independent review.
+The proof covers storage permissions and the lifetime and alignment rules.
+A slot permission gives no permission to dereference the stored pointer,
+so pointer provenance does not affect the safety of the atomic operation.
 
 ## Atomic exchange
 
@@ -291,9 +362,8 @@ The 128-bit proofs use the AArch64 Linux target. The other proofs and
 native tests use Linux x86-64. The Miri tests run on both targets.
 A successful proof replay writes the per-case results to `coverage.json`.
 The scope covers the native Boolean implementation and excludes the
-emulation path. The formal contract does not describe value history, pointer
-provenance or synchronization semantics. The primitive contracts and
-the source comparison await independent review.
+emulation path. The contract is a safety contract. It does not
+describe value history or synchronization.
 
 ## Strong and weak compare-exchange
 
@@ -335,15 +405,13 @@ elevated Miri failure rate and a fixed seed:
 
 ```sh
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-seed=0 -Zmiri-compare-exchange-weak-failure-rate=0.9" \
-  cargo +nightly-2026-11-19 miri test --offline -- --ignored
+  cargo "+$source_nightly" miri test --offline -- --ignored
 ```
 
 The proof covers the native Boolean implementation and the same integer
 and pointer specializations as exchange. The storage-safety contracts
 permit either outcome for both strengths. The source and runtime checks
-provide the evidence about strong versus weak behavior. A formal model
-of synchronization and pointer provenance, and independent review of the
-trusted contracts, remain open.
+provide the evidence about strong versus weak behavior.
 
 ## Atomic addition and subtraction
 
@@ -381,10 +449,7 @@ and dereference restored live pointers. Use `arithmetic-client.rs` as
 `src/lib.rs` in the Miri procedure above. Run the default target and
 `--target aarch64-unknown-linux-gnu` to cover the 128-bit integer cases.
 
-The proofs cover storage safety under trusted primitive contracts. The
-exact arithmetic results and pointer provenance are checked by concrete
-tests. The formal contracts and source comparison still need independent
-review.
+The exact arithmetic results are checked by concrete tests.
 
 ## Atomic bitwise operations
 
@@ -421,9 +486,8 @@ bit patterns, and pointer tagging and untagging followed by a live
 dereference. To replay under Miri, use `bitwise-client.rs` as
 `src/lib.rs` and run the default and `aarch64-unknown-linux-gnu`
 targets as in the arithmetic replay. The 128-bit proof and Miri cases
-use the AArch64 Linux target. The trusted primitive contracts still
-need independent review. Pointer provenance and concrete bitwise
-results are exercised by tests.
+use the AArch64 Linux target. Concrete bitwise results are exercised
+by tests.
 
 ## Atomic minimum and maximum
 
@@ -459,8 +523,7 @@ The runtime client checks the previous and stored values across each
 type's limits. Use `extrema-client.rs` as `src/lib.rs` in the Miri
 procedure above and run both target variants. The 128-bit cases are
 verified for the AArch64 Linux target and exercised there under Miri.
-The trusted contracts still need independent review. The concrete
-comparison results are tested on the pinned nightly.
+The concrete comparison results are tested on the source nightly.
 
 ## Complete integer load and store replay
 
@@ -492,8 +555,7 @@ both load and store orderings and writes `coverage.json` on success.
 For Miri, use `integer-access-client.rs` as `src/lib.rs` and run both
 the default and `aarch64-unknown-linux-gnu` targets. The client checks
 integer limits and confirms that invalid orderings panic without writing
-to the slot. Independent review of the trusted contracts and source
-comparison is still required.
+to the slot.
 
 ## Complete constructor replay
 
@@ -504,7 +566,7 @@ the host using the AArch64 layout exported by rustc.
 
 ```sh
 rustup target add --toolchain nightly-2026-09-25 aarch64-unknown-linux-gnu
-rustup target add --toolchain nightly-2026-11-19 aarch64-unknown-linux-gnu
+rustup target add --toolchain "$source_nightly" aarch64-unknown-linux-gnu
 rustc_path=$(rustup which rustc)
 RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
   python3 "$proof/check-from-ptr.py" \
@@ -520,8 +582,6 @@ proofs and checks the results against the constructor list in Challenge 7.
 A successful run writes `coverage.json` with the proof target for each
 type. The signed and unsigned pointer-sized integers are tracked as extras.
 
-The review boundary includes the patched verifier's compiler-derived
-alignment, the trusted intrinsic alignment premises, the lifetime and
-permission contracts, and the specialization comparison. The AArch64
-results are proofs of the cross-target model. Native AArch64 execution
-and independent review remain open.
+The AArch64 proofs use the alignment that rustc exports for that target.
+Miri runs the AArch64 clients. The replay does not run on native AArch64
+hardware.

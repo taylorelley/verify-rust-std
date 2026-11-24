@@ -8,7 +8,9 @@ shift
 mkdir -- "$work"
 logs="$work/evidence"
 mkdir -- "$logs"
-source_nightly=nightly-2026-11-19
+# The source nightly follows the fork's toolchain file so subtree updates need no edit here.
+source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$proof_dir/../../../../rust-toolchain.toml")
+[[ -n $source_nightly ]] || { echo "No channel in rust-toolchain.toml" >&2; exit 1; }
 verifier_nightly=nightly-2026-09-25
 cross_target=aarch64-unknown-linux-gnu
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
@@ -40,6 +42,7 @@ prove() {
 }
 
 prove constructors check-from-ptr
+prove generic-helpers check-generic-helpers
 prove bool-access check-bool-store
 prove u16-mixed-width check-u16
 prove integer-access check-integer-access
