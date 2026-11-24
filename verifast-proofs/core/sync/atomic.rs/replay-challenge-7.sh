@@ -26,7 +26,7 @@ rustc_path=$(rustup which --toolchain "$source_nightly" rustc)
 {
     "$rustc_path" -vV
     rustc "+$verifier_nightly" -vV
-    sha256sum "$proof_dir/verifast-26.10-u8-store.patch"
+    sha256sum "$proof_dir/verifast-26.10.patch"
 } > "$logs/toolchains-and-patch.txt"
 
 run build bash "$proof_dir/build-store-verifast.sh" "$work/verifast" "$@"

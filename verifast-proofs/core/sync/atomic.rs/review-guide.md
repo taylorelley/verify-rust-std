@@ -9,6 +9,7 @@ proof logs, compiler IR, negative controls and runtime test results.
 
 | Challenge property | Where to start | What to check |
 | --- | --- | --- |
+| Part 1 constructor contracts | `verified/atomic.rs`, the `module-*` coverage logs and the `ctor-*` controls | Each contract encodes the `# Safety` section: alignment to `align_of::<AtomicX>()`, a valid location for `'a`, and only atomic access while the reference lives. |
 | Part 2 helper contracts | `verified/atomic.rs`, `verify.sh` and the `library-module` log | `diff original/atomic.rs verified/atomic.rs` shows only the contracts. Each contract requires the slot permission the operation needs. |
 | Optional panic contracts | `generic-helpers/coverage.json` and `generic-helpers-no-panic.rs` | The no-panic run excludes exactly the orderings that panic. |
 | Live, aligned access | `constructors/coverage.json` and the constructor layout and alignment controls | The constructor obtains permission for the same slot address at the target's required alignment and retains it for the lifetime of the reference. |
@@ -67,7 +68,7 @@ conventions this proof follows.
 
 | | Challenges 5 and 19 | Challenge 7 |
 | --- | --- | --- |
-| Layout | `original/`, `verified/`, `verify.sh`, `update.sh` | The same, for the Part 2 helpers. The constructors and public wrappers use specialized copies with compiled MIR and LLVM comparison. |
+| Layout | `original/`, `verified/`, `verify.sh`, `update.sh` | The same, for the 14 constructors and the 15 helpers. The public wrappers use specialized copies with compiled MIR and LLVM comparison. |
 | Link to `library/` | `refinement-checker` and `diff` | `refinement-checker`, and `diff` after the diagnostic-item attribute rewrite |
 | Source changes in `verified/` | Small rewrites to place ghost commands, refinement-checked | None. Only contracts are added. |
 | VeriFast flags | `-skip_specless_fns`, with `-ignore_unwind_paths` and `-allow_assume` for Challenge 5 | `-skip_specless_fns` only. Unwind paths are verified and no `assume` is used. |

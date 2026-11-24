@@ -18,7 +18,7 @@
     "verifast-proofs/core/sync/atomic.rs/build-store-verifast.sh",
     "verifast-proofs/core/sync/atomic.rs/check-bool-store.py",
     "verifast-proofs/core/sync/atomic.rs/bool-store.rs.in",
-    "verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch",
+    "verifast-proofs/core/sync/atomic.rs/verifast-26.10.patch",
     "verifast-proofs/core/sync/atomic.rs/scope-api-probe.rs",
     "verifast-proofs/core/sync/atomic.rs/check-u16.py",
     "verifast-proofs/core/sync/atomic.rs/u16-proof.rs",

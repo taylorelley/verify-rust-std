@@ -385,6 +385,108 @@ pub struct Atomic<T: AtomicPrimitive> {
     v: UnsafeCell<T::Storage>,
 }
 
+/*@
+
+// The atomic view of a location holding a T.
+fix atomic_view<T>(p: *T) -> *Atomic<T> { p as *Atomic<T> }
+
+// The alignment that from_ptr requires of a location holding a T.
+fix atomic_view_align<T>(p: *T) -> usize { std::mem::align_of::<Atomic<T> >() }
+
+// What an atomic reference grants for its lifetime: atomic access to the slot at
+// the operand type, which preserves the slot's value invariant.
+pred_ctor atomic_slot<T>(p: *T, inv_: fix(T, bool))(;) = std::intrinsics::atomic_points_to(p, 1, inv_);
+
+// The storage byte of an AtomicBool holds 0 or 1.
+fix bool_byte(b: u8) -> bool { b == 0 || b == 1 }
+
+// Ownership of an initialized location, returned to the caller when the lifetime ends.
+pred_ctor initialized<T>(p: *T)() = *p |-> ?v;
+
+// Lends an initialized, atomically aligned location for lifetime k as an atomic slot.
+lem atomic_slot_new<T>(k: lifetime_t, p: *T)
+    req atomic_mask(MaskTop) &*& [?q]lifetime_token(k) &*& *p |-> ?v &*&
+        p as usize % std::intrinsics::atomic_align_of::<T>() == 0;
+    ens atomic_mask(MaskTop) &*& [q]lifetime_token(k) &*&
+        [_]frac_borrow(k, atomic_slot(p, (std::intrinsics::atomic_value_allowed)(true))) &*&
+        borrow_end_token(k, initialized(p));
+{
+    close initialized::<T>(p)();
+    borrow_m(k, initialized::<T>(p));
+    open_full_borrow_strong_m_(k, initialized::<T>(p));
+    open initialized::<T>(p)();
+    std::intrinsics::close_atomic_points_to_m(p, (std::intrinsics::atomic_value_allowed)(true));
+    close atomic_slot::<T>(p, (std::intrinsics::atomic_value_allowed)(true))();
+    close True();
+    produce_lem_ptr_chunk restore_full_borrow_(True, atomic_slot::<T>(p, (std::intrinsics::atomic_value_allowed)(true)), initialized::<T>(p))() {
+        open True();
+        open atomic_slot::<T>(p, (std::intrinsics::atomic_value_allowed)(true))();
+        std::intrinsics::open_atomic_points_to(p);
+        close initialized::<T>(p)();
+    } {
+        close_full_borrow_strong_m_();
+    }
+    full_borrow_into_frac_m(k, atomic_slot::<T>(p, (std::intrinsics::atomic_value_allowed)(true)));
+}
+
+// The Boolean variant: the slot is the storage byte, restricted to 0 and 1.
+lem atomic_slot_new_bool(k: lifetime_t, p: *bool)
+    req atomic_mask(MaskTop) &*& [?q]lifetime_token(k) &*& *p |-> ?v;
+    ens atomic_mask(MaskTop) &*& [q]lifetime_token(k) &*&
+        [_]frac_borrow(k, atomic_slot(p as *u8, bool_byte)) &*& borrow_end_token(k, initialized(p));
+{
+    close initialized::<bool>(p)();
+    borrow_m(k, initialized::<bool>(p));
+    open_full_borrow_strong_m_(k, initialized::<bool>(p));
+    open initialized::<bool>(p)();
+    points_to_bool_to_u8(p);
+    div_rem(p as usize, 1);
+    std::intrinsics::atomic_align_of_u8();
+    std::intrinsics::close_atomic_points_to_m(p as *u8, bool_byte);
+    close atomic_slot::<u8>(p as *u8, bool_byte)();
+    close True();
+    produce_lem_ptr_chunk restore_full_borrow_(True, atomic_slot::<u8>(p as *u8, bool_byte), initialized::<bool>(p))() {
+        open True();
+        open atomic_slot::<u8>(p as *u8, bool_byte)();
+        std::intrinsics::open_atomic_points_to(p as *u8);
+        points_to_u8_to_bool(p as *u8);
+        close initialized::<bool>(p)();
+    } {
+        close_full_borrow_strong_m_();
+    }
+    full_borrow_into_frac_m(k, atomic_slot::<u8>(p as *u8, bool_byte));
+}
+
+// Atomic<T> has a single UnsafeCell field, so a new reference to it needs no
+// read-only memory and is initialized for any lifetime.
+lem atomic_ref_init<V>(k: lifetime_t, p: *Atomic<V>)
+    req atomic_mask(MaskTop) &*& ref_init_perm(p, ?x);
+    ens atomic_mask(MaskTop) &*& [_]frac_borrow(k, ref_initialized_(p));
+{
+    open_ref_init_perm_Atomic(p);
+    close_ref_initialized_Atomic(p, 1);
+    close ref_initialized_::<Atomic<V> >(p)();
+    borrow_m(k, ref_initialized_::<Atomic<V> >(p));
+    leak borrow_end_token(k, ref_initialized_::<Atomic<V> >(p));
+    full_borrow_into_frac_m(k, ref_initialized_::<Atomic<V> >(p));
+}
+
+lem atomic_ref_unwrap<V>(p: *Atomic<V>)
+    req [?f]ref_initialized_(p)();
+    ens [f]ref_initialized(p);
+{
+    open [f]ref_initialized_::<Atomic<V> >(p)();
+}
+
+lem atomic_ref_wrap<V>(p: *Atomic<V>)
+    req [?f]ref_initialized(p);
+    ens [f]ref_initialized_(p)();
+{
+    close [f]ref_initialized_::<Atomic<V> >(p)();
+}
+
+@*/
+
 #[stable(feature = "rust1", since = "1.0.0")]
 unsafe impl<T: AtomicPrimitive> Send for Atomic<T> {}
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -600,9 +702,32 @@ impl AtomicBool {
     #[inline]
     #[stable(feature = "atomic_from_ptr", since = "1.75.0")]
     #[rustc_const_stable(feature = "const_atomic_from_ptr", since = "1.84.0")]
-    pub const unsafe fn from_ptr<'a>(ptr: *mut bool) -> &'a AtomicBool {
+    pub const unsafe fn from_ptr<'a>(ptr: *mut bool) -> &'a AtomicBool
+    /*@
+    req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*&
+        ptr as usize % atomic_view_align(ptr) == 0 &*&
+        exists::<bool>(?fresh) &*&
+        if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr as *u8, bool_byte)) };
+    @*/
+    /*@
+    ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*&
+        ref_origin(result) == ref_origin(atomic_view(ptr)) &*&
+        [_]frac_borrow('a, atomic_slot(ptr as *u8, bool_byte)) &*& [_]frac_borrow('a, ref_initialized_(result)) &*&
+        if fresh { borrow_end_token('a, initialized(ptr)) } else { true };
+    @*/
+    //@ on_unwind_ens false;
+    {
+        //@ open exists(fresh);
+        //@ if fresh { atomic_slot_new_bool('a, ptr); }
+        //@ let p = precreate_ref(atomic_view(ptr));
+        //@ atomic_ref_init('a, p);
+        //@ let f = open_frac_borrow('a, ref_initialized_(p), q);
+        //@ atomic_ref_unwrap(p);
         // SAFETY: guaranteed by the caller
-        unsafe { &*ptr.cast() }
+        let result = unsafe { &*ptr.cast() };
+        //@ atomic_ref_wrap(p);
+        //@ close_frac_borrow(f, ref_initialized_(p));
+        result
     }
 
     /// Creates a new pointer to `AtomicBool` from a pointer.
@@ -1638,9 +1763,33 @@ impl<T> AtomicPtr<T> {
     #[inline]
     #[stable(feature = "atomic_from_ptr", since = "1.75.0")]
     #[rustc_const_stable(feature = "const_atomic_from_ptr", since = "1.84.0")]
-    pub const unsafe fn from_ptr<'a>(ptr: *mut *mut T) -> &'a AtomicPtr<T> {
+    pub const unsafe fn from_ptr<'a>(ptr: *mut *mut T) -> &'a AtomicPtr<T>
+    /*@
+    req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*&
+        ptr as usize % atomic_view_align(ptr) == 0 &*&
+        exists::<bool>(?fresh) &*&
+        if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) };
+    @*/
+    /*@
+    ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*&
+        ref_origin(result) == ref_origin(atomic_view(ptr)) &*&
+        [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) &*& [_]frac_borrow('a, ref_initialized_(result)) &*&
+        if fresh { borrow_end_token('a, initialized(ptr)) } else { true };
+    @*/
+    //@ on_unwind_ens false;
+    {
+        //@ open exists(fresh);
+        //@ std::intrinsics::atomic_align_of_ptr::<T>();
+        //@ if fresh { atomic_slot_new('a, ptr); }
+        //@ let p = precreate_ref(atomic_view(ptr));
+        //@ atomic_ref_init('a, p);
+        //@ let f = open_frac_borrow('a, ref_initialized_(p), q);
+        //@ atomic_ref_unwrap(p);
         // SAFETY: guaranteed by the caller
-        unsafe { &*ptr.cast() }
+        let result = unsafe { &*ptr.cast() };
+        //@ atomic_ref_wrap(p);
+        //@ close_frac_borrow(f, ref_initialized_(p));
+        result
     }
 
     /// Creates a new pointer to `AtomicPtr` from a pointer.
@@ -2940,9 +3089,32 @@ macro_rules! atomic_int {
             #[inline]
             #[stable(feature = "atomic_from_ptr", since = "1.75.0")]
             #[rustc_const_stable(feature = "const_atomic_from_ptr", since = "1.84.0")]
-            pub const unsafe fn from_ptr<'a>(ptr: *mut $int_type) -> &'a $atomic_type {
+        pub const unsafe fn from_ptr<'a>(ptr: *mut $int_type) -> &'a $atomic_type
+            /*@
+            req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*&
+                ptr as usize % atomic_view_align(ptr) == 0 &*&
+                exists::<bool>(?fresh) &*&
+                if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) };
+            @*/
+            /*@
+            ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*&
+                ref_origin(result) == ref_origin(atomic_view(ptr)) &*&
+                [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) &*& [_]frac_borrow('a, ref_initialized_(result)) &*&
+                if fresh { borrow_end_token('a, initialized(ptr)) } else { true };
+            @*/
+            //@ on_unwind_ens false;
+            {
+                //@ open exists(fresh);
+                //@ if fresh { atomic_slot_new('a, ptr); }
+                //@ let p = precreate_ref(atomic_view(ptr));
+                //@ atomic_ref_init('a, p);
+                //@ let f = open_frac_borrow('a, ref_initialized_(p), q);
+                //@ atomic_ref_unwrap(p);
                 // SAFETY: guaranteed by the caller
-                unsafe { &*ptr.cast() }
+                let result = unsafe { &*ptr.cast() };
+                //@ atomic_ref_wrap(p);
+                //@ close_frac_borrow(f, ref_initialized_(p));
+                result
             }
 
             /// Creates a new pointer to an atomic integer from a pointer.

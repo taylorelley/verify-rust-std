@@ -245,6 +245,53 @@ def main():
                 raise SystemExit(f"Expected {name} to fail with {diagnostic!r}. See {name}.log")
             results[name] = "rejected"
 
+        macro_start = module.index("macro_rules! atomic_int")
+
+        def in_macro(old):
+            index = module.index(old, macro_start)
+            return module[:index], module[index:]
+
+        def module_control_at(name, prefix, old, new, diagnostic):
+            before, after = in_macro(prefix) if prefix == "macro" else (module, "")
+            if prefix == "macro":
+                mutated = before + after.replace(old, new, 1)
+            else:
+                if module.count(old) != 1:
+                    raise SystemExit(f"Expected one occurrence of {old!r}")
+                mutated = module.replace(old, new)
+            target.write_text(mutated)
+            result = subprocess.run([*verifier, "verified/lib.rs"], capture_output=True, text=True, cwd=work)
+            output = result.stdout + result.stderr
+            (logs / f"{name}.log").write_text(output)
+            target.write_text(module)
+            if not result.returncode or diagnostic not in output:
+                raise SystemExit(f"Expected {name} to fail with {diagnostic!r}. See {name}.log")
+            results[name] = "rejected"
+
+        # An integer constructor without the documented alignment requirement.
+        module_control_at("ctor-int-missing-alignment", "macro",
+                          "ptr as usize % atomic_view_align(ptr) == 0 &*&", "true &*&",
+                          "std::intrinsics::atomic_align_of(int8_t_typeid)) = 0")
+        # A fresh Boolean conversion without an initialized location.
+        module_control_at("ctor-bool-uninitialized", None,
+                          "if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr as *u8, bool_byte)) };",
+                          "if fresh { true } else { [_]frac_borrow('a, atomic_slot(ptr as *u8, bool_byte)) };",
+                          "No matching heap chunks: points_to<bool>")
+        # Reusing an existing view without its atomic slot.
+        module_control_at("ctor-int-reuse-without-slot", "macro",
+                          "if fresh { *ptr |-> ?value } else { [_]frac_borrow('a, atomic_slot(ptr, (std::intrinsics::atomic_value_allowed)(true))) };",
+                          "if fresh { *ptr |-> ?value } else { true };",
+                          "No matching heap chunks: [_]frac_borrow")
+        # A Boolean slot whose invariant admits any byte would not restore a valid bool.
+        module_control_at("ctor-bool-unrestricted-byte", None,
+                          "fix bool_byte(b: u8) -> bool { b == 0 || b == 1 }",
+                          "fix bool_byte(b: u8) -> bool { true }",
+                          "Cannot prove v1 = 0 || v1 = 1")
+        # The pointer constructor needs the thin-pointer alignment fact.
+        module_control_at("ctor-ptr-missing-alignment-fact", None,
+                          "        //@ std::intrinsics::atomic_align_of_ptr::<T>();\n", "",
+                          "std::intrinsics::atomic_align_of(pointer_typeid(T_typeid))) = 0")
+
         module_control(
             "module-refinement-changed-ordering",
             "Relaxed => intrinsics::atomic_xchg::<T, { AO::Relaxed }>(dst, val),",
@@ -259,6 +306,23 @@ def main():
             store_contract.replace("(dst, 1, ?valid)", "(dst, ?p, ?valid)").replace("(dst, 1, valid)", "(dst, p, valid)"),
             [*verifier, "verified/lib.rs"],
             "No matching heap chunks: [_]std::intrinsics::atomic_points_to<T>(dst, 1, _)")
+
+    # Every Challenge 7 constructor and helper must be verified in the module,
+    # including all expansions of the atomic_int! macro.
+    constructors = ["bool", "*mut T", "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
+                    "isize", "usize"]
+    for target, extra in (("x86_64-unknown-linux-gnu", []), ("aarch64-unknown-linux-gnu", ["i128", "u128"])):
+        command = [args.verifast_bin.resolve() / "verifast", "-verbose", "1", "-skip_specless_fns",
+                   "-rustc_args", f"--edition=2024 --crate-type=lib --target {target}", "verified/lib.rs"]
+        result = subprocess.run(command, capture_output=True, text=True, cwd=here)
+        output = result.stdout + result.stderr
+        (logs / f"module-{target}.log").write_text(output)
+        expected = [f"atomic::Atomic::<{ty}>::from_ptr" for ty in constructors + extra]
+        expected += [f"atomic::{name}" for name in HELPERS]
+        missing = [f for f in expected if f"Verifying function '{f}'" not in output]
+        if result.returncode or "0 errors found" not in output or missing:
+            raise SystemExit(f"Module proof for {target} is incomplete: {missing}. See module-{target}.log")
+        results[f"module-coverage-{target}"] = f"{len(expected)} functions verified"
 
     # The patch treats a projection as sized only for a Sized associated type.
     projection = (here / "projection.rs").read_text()

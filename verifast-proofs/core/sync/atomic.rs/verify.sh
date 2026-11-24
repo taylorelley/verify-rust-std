@@ -5,8 +5,12 @@ set -e -x
 cd "$(dirname "$0")"
 flags="--edition=2024 --crate-type=lib"
 
-verifast -rustc_args "$flags" -skip_specless_fns verified/lib.rs
-refinement-checker --rustc-args "$flags" original/lib.rs verified/lib.rs > /dev/null
+# AtomicI128 and AtomicU128 exist only on targets with 128-bit atomics, so the
+# module is also checked for AArch64 Linux.
+for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+  verifast -rustc_args "$flags --target $target" -skip_specless_fns verified/lib.rs
+  refinement-checker --rustc-args "$flags --target $target" original/lib.rs verified/lib.rs > /dev/null
+done
 
 # The crate redefines core's diagnostic items, so the copies turn those four
 # attributes into doc attributes. Everything else must match the library.

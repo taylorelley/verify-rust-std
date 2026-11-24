@@ -9,10 +9,11 @@ for Linux x86-64, and for AArch64 Linux in the 128-bit cases.
 
 | Challenge 7 item | Proof step | Evidence |
 | --- | --- | --- |
-| Part 1: the 12 `from_ptr` constructors | `constructors` | Each constructor needs a live, initialized slot with the atomic alignment of its type, and holds it for the reference lifetime. All slot values are symbolic. `AtomicPtr` uses pointee sizes 0, 1, 2, 3 and 4 with an unrestricted pointer value. |
+| Part 1: the 12 `from_ptr` constructors | `library-module`, with `constructors` as a per-type cross-check | Each constructor in the library module needs a live, initialized location with the documented alignment, `align_of::<AtomicX>()`, and lends it as an atomic slot for the reference lifetime. The location is returned when the lifetime ends. All values are symbolic. `AtomicPtr<T>` is verified once for every `T`. The 128-bit types use AArch64 Linux. |
 | Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `library-module` and `generic-helpers` | Each helper carries one generic contract and is verified inside the full library module. `refinement-checker` and `diff` tie the module to `library/`, as in the Challenge 5 and 19 proofs. |
+| Constructor and helper coverage | `generic-helpers/coverage.json` | The replay checks that VeriFast reports each of the 14 constructors and 15 helpers as verified on the target that has it, so a skipped macro expansion fails the run. |
 | Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The public wrappers unwind on invalid orderings with every resource intact. |
-| Part 3: intrinsic contracts | `verifast-26.10-u8-store.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
+| Part 3: intrinsic contracts | `verifast-26.10.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
 | Public methods and instantiations | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | Every public wrapper on `AtomicBool`, all integer widths and `AtomicPtr` at five pointee sizes, connected to the library by compiled MIR and LLVM comparison. |
 
 The listed undefined behaviors are excluded as follows:
@@ -38,14 +39,17 @@ The listed undefined behaviors are excluded as follows:
    They are the specifications of compiler primitives, so they cannot be proved
    in Rust.
 2. The patched VeriFast frontend, which decodes const-generic `AtomicOrdering`
-   arguments and exports ABI alignment for concrete structs. The patch applies
+   arguments and passes rustc's alignment for structs and for the instances
+   of generic structs used in function signatures, such as `Atomic<i16>`. The patch applies
    to VeriFast 26.10 and to the current master. Once a VeriFast release includes
    it, the repository's pinned release can replace it. See
    [`verifast-upstream.md`](verifast-upstream.md).
-3. The per-type proofs of the constructors and public wrappers: a specialized
-   copy of each is verified, then compared with the compiled library code by the
-   replay scripts. The Part 2 helpers need no such comparison, since they are
-   verified in the library module itself.
+3. The per-type proofs of the public wrappers, such as `AtomicBool::store`: a
+   specialized copy of each is verified, then compared with the compiled library
+   code by the replay scripts. The constructors and helpers need no such
+   comparison, since they are verified in the library module itself. The
+   wrappers stay specialized because VeriFast cannot yet express a sharing
+   predicate for the generic `Atomic<T>` (see `verifast-upstream.md`).
 
 [`review-guide.md`](review-guide.md) maps each claim to its evidence and lists
 the checks a reviewer should repeat.
@@ -94,7 +98,8 @@ claim. See [`supplementary-scoped-threads.md`](supplementary-scoped-threads.md).
 ## Library module proof
 
 `original/` holds the library's `atomic.rs` and `verified/` holds the same file
-with VeriFast contracts on the 15 unsafe helpers. In both copies the four
+with VeriFast contracts on the 14 `from_ptr` constructors and the 15 unsafe
+helpers. In both copies the four
 `#[rustc_diagnostic_item]` attributes become doc attributes, because the proof
 crate cannot redefine core's diagnostic items. `verify.sh` follows the Challenge 5
 and Challenge 19 proofs. It runs VeriFast on the whole of `verified/`, runs
@@ -109,7 +114,23 @@ PATH=/tmp/challenge-7-verifast-build/verifast-26.10/bin:$PATH \
 ```
 
 VeriFast runs with `-skip_specless_fns` only. It verifies unwind paths and
-allows no `assume` statements.
+allows no `assume` statements. `verify.sh` checks the module for Linux x86-64 and
+AArch64 Linux.
+
+The constructor contract follows the `# Safety` section of `from_ptr`. The
+caller passes `[q]lifetime_token('a)` and either ownership of an initialized,
+`align_of::<AtomicX>()`-aligned location (`fresh`), or the atomic slot of an
+existing view. The constructor returns a reference with the same origin and
+`[_]frac_borrow('a, atomic_slot(...))`, which permits only atomic access for `'a`.
+In the fresh case it also returns `borrow_end_token('a, initialized(ptr))`, so the
+caller can read the location non-atomically once `'a` ends. For `AtomicBool`, the
+slot is the storage byte, restricted to 0 and 1. The rustc alignment of each
+atomic type reaches the proof through the patch's instance alignments.
+
+Five controls run on the constructors: an integer constructor without the
+alignment requirement, a fresh Boolean conversion without an initialized
+location, reuse without an existing slot, a Boolean slot that admits any byte,
+and the pointer constructor without the thin-pointer alignment fact.
 
 ## Generic unsafe helpers
 

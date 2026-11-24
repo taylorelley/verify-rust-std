@@ -204,27 +204,29 @@ index a5d925d..e457448 100644
  
  mod mem {
 diff --git a/src/frontend/ast.ml b/src/frontend/ast.ml
-index e55645c..ce24504 100644
+index e55645c..942466f 100644
 --- a/src/frontend/ast.ml
 +++ b/src/frontend/ast.ml
-@@ -1119,7 +1119,7 @@ and
+@@ -1119,7 +1119,8 @@ and
  and
    struct_attr =
    | Packed
 -  | ReprC
 +  | ReprC | RustcAbiAlignment of int
++  | RustcInstanceAlignment of string list (* quantified type parameters *) * type_expr list (* struct type arguments *) * int
  and constant_value = (* ?constant_value *)
    IntConst of big_int
  | BoolConst of bool
 diff --git a/src/frontend/ocaml_expr_of_ast.ml b/src/frontend/ocaml_expr_of_ast.ml
-index 959ce64..23902e1 100644
+index 959ce64..c53c6da 100644
 --- a/src/frontend/ocaml_expr_of_ast.ml
 +++ b/src/frontend/ocaml_expr_of_ast.ml
-@@ -1170,6 +1170,7 @@ and of_ctor = function
+@@ -1170,6 +1170,8 @@ and of_ctor = function
  and of_struct_attr = function
    Packed -> c "Packed"
  | ReprC -> c "ReprC"
 +| RustcAbiAlignment n -> C ("RustcAbiAlignment", [I n])
++| RustcInstanceAlignment (xs, targs, n) -> C ("RustcInstanceAlignment", [of_list (fun x -> S x) xs; of_list of_type_expr targs; I n])
  and of_constant_value = function
    IntConst n -> C ("IntConst", [BigInt n])
  | BoolConst b -> C ("BoolConst", [B b])
@@ -345,18 +347,28 @@ index 77c3c28..32fc587 100644
    let inputs0 = body0.inputs in
    let inputs1 = body1.inputs in
 diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
-index 9e81d09..f053526 100644
+index 9e81d09..671416a 100644
 --- a/src/rust_frontend/vf_mir/vf_mir.capnp
 +++ b/src/rust_frontend/vf_mir/vf_mir.capnp
-@@ -279,6 +279,7 @@ struct AdtDef {
+@@ -279,6 +279,17 @@ struct AdtDef {
      clauses @7: List(Clause);
      implementsDrop @8: Bool;
      isReprC @11: Bool;
 +    knownAlignment @12: UInt64; # Zero if unavailable or generic.
++    struct InstanceAlignment {
++        # The ABI alignment that rustc computes for this ADT applied to genericArgs,
++        # in the typing environment of a local function whose signature mentions
++        # the instance. typeParams lists the function's type parameters occurring
++        # in genericArgs; the layout was computed without knowing them.
++        genericArgs @0: List(GenericArg);
++        typeParams @1: List(Text);
++        alignment @2: UInt64;
++    }
++    instanceAlignments @13: List(InstanceAlignment);
  }
  
  enum AliasTyKind {
-@@ -312,6 +313,7 @@ struct TyKind {
+@@ -312,6 +323,7 @@ struct TyKind {
      struct RawPtrTy {
          ty @0: Ty;
          mutability @1: Mutability;
@@ -364,7 +376,7 @@ index 9e81d09..f053526 100644
      }
  
      struct RefTy {
-@@ -418,11 +420,16 @@ struct Clause {
+@@ -418,11 +430,16 @@ struct Clause {
          projectionTerm @0: AliasTerm;
          term @1: Term; # G
      }
@@ -381,7 +393,7 @@ index 9e81d09..f053526 100644
      }
  }
  
-@@ -888,6 +895,9 @@ struct Trait {
+@@ -888,6 +905,9 @@ struct Trait {
  
      name @0: Text;
      requiredFns @1: IndList(RequiredFn);
@@ -392,7 +404,7 @@ index 9e81d09..f053526 100644
  
  struct TyAlias {
 diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
-index 9621ba9..68b65c6 100644
+index 9621ba9..610188c 100644
 --- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
 +++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
 @@ -786,6 +786,36 @@ use rustc_span::RemapPathScopeComponents;
@@ -432,7 +444,64 @@ index 9621ba9..68b65c6 100644
                  let mut required_fns_cpn = trait_cpn.reborrow().init_required_fns();
                  for item in self
                      .tcx
-@@ -1098,6 +1128,13 @@ use rustc_span::RemapPathScopeComponents;
+@@ -930,6 +960,7 @@ use rustc_span::RemapPathScopeComponents;
+             // Encode traits (consumes annotations)
+             self.encode_traits(&mut req_adt_defs, vf_mir_cpn.reborrow());
+ 
++            let mut expansion_spans = Vec::new();
+             vf_mir_cpn.fill_bodies(&self.bodies, |mut body_cpn, (body, span)| {
+                 Self::encode_span_data(
+                     self.tcx,
+@@ -937,17 +968,24 @@ use rustc_span::RemapPathScopeComponents;
+                     body_cpn.reborrow().init_fn_sig_span(),
+                 );
+                 let body_span = body.span.data();
+-                let mut annots = self
+-                    .annots
+-                    .extract_if(|annot| {
+-                        body_span.contains(
+-                            annot
+-                                .span()
+-                                .expect("Dummy annot found during serialization")
+-                                .data(),
+-                        )
+-                    })
+-                    .collect::<LinkedList<_>>();
++                let in_body = |annot: &Box<GhostRange>| {
++                    body_span.contains(
++                        annot
++                            .span()
++                            .expect("Dummy annot found during serialization")
++                            .data(),
++                    )
++                };
++                // All expansions of a macro share the annotations written in the macro
++                // body, so each such body gets its own copy. They are removed once all
++                // bodies are encoded.
++                let mut annots = if body.span.from_expansion() {
++                    let shared = self.annots.iter().filter(|annot| in_body(annot)).cloned().collect::<LinkedList<_>>();
++                    expansion_spans.push(body_span);
++                    shared
++                } else {
++                    self.annots.extract_if(|annot| in_body(annot)).collect::<LinkedList<_>>()
++                };
+                 let mut_annots = annots.extract_if(|annot| {
+                     annot.kind == GhostRangeKind::Mut
+                 }).map(|annot| {
+@@ -958,6 +996,12 @@ use rustc_span::RemapPathScopeComponents;
+                 Self::encode_body(&mut enc_ctx, body_cpn);
+                 req_adt_defs.extend(enc_ctx.get_req_adts());
+             });
++            for span in expansion_spans {
++                let _ = self
++                    .annots
++                    .extract_if(|annot| span.contains(annot.span().expect("Dummy annot").data()))
++                    .count();
++            }
+ 
+             // Encode directives
+             vf_mir_cpn.fill_directives(&self.directives, |directive_cpn, directive| {
+@@ -1098,6 +1142,74 @@ use rustc_span::RemapPathScopeComponents;
              });
              adt_def_cpn.set_implements_drop(adt_def.has_dtor(tcx));
              adt_def_cpn.set_is_repr_c(adt_def.repr().c());
@@ -443,10 +512,71 @@ index 9621ba9..68b65c6 100644
 +                    adt_def_cpn.set_known_alignment(layout.align.abi.bytes());
 +                }
 +            }
++            if is_local && adt_def.is_struct() {
++                let instances = Self::instance_alignments(tcx, adt_def.did());
++                let mut instances_cpn =
++                    adt_def_cpn.reborrow().init_instance_alignments(instances.len());
++                for (i, (args, type_params, alignment)) in instances.into_iter().enumerate() {
++                    let mut instance_cpn = instances_cpn.reborrow().get(i);
++                    instance_cpn.fill_generic_args(args.iter(), |arg_cpn, arg| {
++                        Self::encode_gen_arg(tcx, enc_ctx, arg, arg_cpn);
++                    });
++                    instance_cpn.fill_type_params(type_params.iter().map(|x| x.as_str()));
++                    instance_cpn.set_alignment(alignment);
++                }
++            }
++        }
++
++        /// Collects the instances of a local struct that occur in the signatures of local
++        /// functions, with the ABI alignment rustc computes for each in the function's
++        /// typing environment. An instance is skipped if its layout depends on the
++        /// function's generic parameters, if it has lifetime or const arguments, or if
++        /// its arguments mention projections, which may have no VeriFast typeid.
++        fn instance_alignments(
++            tcx: TyCtxt<'tcx>,
++            adt_did: rustc_span::def_id::DefId,
++        ) -> Vec<(ty::GenericArgsRef<'tcx>, Vec<String>, u64)> {
++            use rustc_middle::ty::TypeVisitableExt;
++            let mut instances: Vec<(ty::GenericArgsRef<'tcx>, Vec<String>, u64)> = Vec::new();
++            for fn_did in tcx.hir_body_owners() {
++                let fn_did = fn_did.to_def_id();
++                if !matches!(tcx.def_kind(fn_did), hir::def::DefKind::Fn | hir::def::DefKind::AssocFn) {
++                    continue;
++                }
++                let sig = tcx.fn_sig(fn_did).instantiate_identity().skip_normalization().skip_binder();
++                let env = ty::TypingEnv::post_analysis(tcx, fn_did);
++                for sig_ty in sig.inputs_and_output.iter() {
++                    for arg in sig_ty.walk() {
++                        let Some(ty) = arg.as_type() else { continue };
++                        let ty::Adt(def, args) = ty.kind() else { continue };
++                        if def.did() != adt_did || ty.has_free_regions() || ty.has_escaping_bound_vars()
++                            || ty.has_aliases()
++                            || args.iter().any(|a| a.as_type().is_none())
++                            || instances.iter().any(|(a, _, _)| *a == *args)
++                        {
++                            continue;
++                        }
++                        let Ok(layout) = tcx.layout_of(env.as_query_input(ty)) else { continue };
++                        let mut type_params: Vec<String> = Vec::new();
++                        for inner in ty.walk() {
++                            if let Some(inner_ty) = inner.as_type() {
++                                if let ty::Param(param) = inner_ty.kind() {
++                                    let name = param.name.to_string();
++                                    if !type_params.contains(&name) {
++                                        type_params.push(name);
++                                    }
++                                }
++                            }
++                        }
++                        instances.push((args, type_params, layout.align.abi.bytes()));
++                    }
++                }
++            }
++            instances
          }
  
          fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
-@@ -1224,6 +1261,11 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1224,6 +1336,11 @@ use rustc_span::RemapPathScopeComponents;
                              Self::encode_typesystem_constant(enc_ctx.tcx, enc_ctx, &const_, term_cpn.init_const()),
                      }
                  }
@@ -458,7 +588,7 @@ index 9621ba9..68b65c6 100644
                  _ => clause_cpn.set_ignored(()),
              }
          }
-@@ -1826,9 +1868,19 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1826,9 +1943,19 @@ use rustc_span::RemapPathScopeComponents;
                      Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
                  }
                  ty::TyKind::Foreign(_) => ty_kind_cpn.set_foreign(()),
@@ -481,8 +611,21 @@ index 9621ba9..68b65c6 100644
                  }
                  ty::TyKind::Ref(region, ty, mutability) => {
                      let ref_ty_cpn = ty_kind_cpn.init_ref();
+diff --git a/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs b/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs
+index e0fcd7c..4c5ca4f 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs
+@@ -68,7 +68,7 @@ pub enum GhostRangeKind {
+     Mut,
+ }
+ 
+-#[derive(Debug)]
++#[derive(Clone, Debug)]
+ pub struct GhostRange {
+     in_fn_body: bool,
+     pub kind: GhostRangeKind,
 diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-index 4e237a6..4f1a11c 100644
+index 4e237a6..7623de3 100644
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 @@ -1456,6 +1456,140 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
@@ -687,23 +830,55 @@ index 4e237a6..4f1a11c 100644
  
    let decode_clause (clause_cpn : D.clause) =
      match clause_cpn with
-@@ -6278,7 +6436,14 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -6267,6 +6425,28 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+             let [ variant_def_no_zst ] = variants_no_zst in
+             let fds_no_zst = variant_def_no_zst.fields in
+             let field_defs_no_zst = List.map translate_to_vf_field_def fds_no_zst in
++            (* Alignments of instances such as Atomic<i16>, computed by rustc. *)
++            (* An instance whose type arguments VeriFast cannot represent, such as
++               Box<str>, gets no fact. *)
++            let instance_alignments =
++              instance_alignments_get_list adt_def_cpn
++              |> List.filter_map @@ fun instance_cpn ->
++                 let open AdtDefRd.InstanceAlignment in
++                 let alignment = alignment_get instance_cpn in
++                 if alignment = Stdint.Uint64.zero || alignment > Stdint.Uint64.of_int (1 lsl 29) then
++                   Ast.static_error def_loc "Invalid compiler-exported instance alignment" None;
++                 let translate arg_cpn =
++                   match translate_generic_arg (D.decode_generic_arg arg_cpn) def_loc with
++                   | Ok (Mir.GenArgType ty_info) -> Some ty_info.vf_ty
++                   | _ -> None
++                   | exception Ast.StaticError _ -> None
++                 in
++                 let targs = List.map translate (generic_args_get_list instance_cpn) in
++                 if List.mem None targs then None
++                 else
++                   Some (Ast.RustcInstanceAlignment (type_params_get_list instance_cpn,
++                     List.map Option.get targs, Stdint.Uint64.to_int alignment))
++            in
+             let struct_decl =
+               Ast.Struct
+                 ( def_loc,
+@@ -6278,7 +6458,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
 -                  if is_repr_c_get adt_def_cpn then [ ReprC ] else [] )
 +                  let repr = if is_repr_c_get adt_def_cpn then [ Ast.ReprC ] else [] in
 +                  let alignment = known_alignment_get adt_def_cpn in
-+                  if alignment = Stdint.Uint64.zero then repr
-+                  else begin
-+                    if vf_tparams <> [] || alignment > Stdint.Uint64.of_int (1 lsl 29) then
-+                      Ast.static_error def_loc "Invalid compiler-exported concrete ABI alignment" None;
-+                    Ast.RustcAbiAlignment (Stdint.Uint64.to_int alignment) :: repr
-+                  end )
++                  let attrs =
++                    if alignment = Stdint.Uint64.zero then repr
++                    else begin
++                      if vf_tparams <> [] || alignment > Stdint.Uint64.of_int (1 lsl 29) then
++                        Ast.static_error def_loc "Invalid compiler-exported concrete ABI alignment" None;
++                      Ast.RustcAbiAlignment (Stdint.Uint64.to_int alignment) :: repr
++                    end
++                  in
++                  attrs @ instance_alignments )
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7801,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -7636,8 +7826,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -715,7 +890,7 @@ index 4e237a6..4f1a11c 100644
      | _ -> None
  
 diff --git a/src/verifast1.ml b/src/verifast1.ml
-index e0bff63..f39edd1 100644
+index e0bff63..e5f699e 100644
 --- a/src/verifast1.ml
 +++ b/src/verifast1.ml
 @@ -2473,6 +2473,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
@@ -748,7 +923,7 @@ index e0bff63..f39edd1 100644
      and get_struct_sizedness sn =
        match try_assoc sn struct_sizedness_map1 with
          Some (l, state_ref) -> finish_struct_sizedness_checking l sn state_ref
-@@ -6514,6 +6528,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+@@ -6514,6 +6528,33 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
          ctxt#assume_forall name [trigger] (List.map (fun x -> ctxt#type_inductive) tparams) fact
        end
      in
@@ -758,7 +933,323 @@ index e0bff63..f39edd1 100644
 +          static_error l "Invalid compiler-exported concrete ABI alignment" None;
 +        let type_info = ctxt#mk_app type_info_func [] in
 +        ctxt#assert_term (ctxt#mk_eq (mk_alignof type_info) (ctxt#mk_intlit n))
++      | RustcInstanceAlignment (qtparams, targ_tes, n) ->
++        (* The alignment rustc computed for this instance. If the instance mentions
++           type parameters, rustc computed it without knowing them. *)
++        if dialect <> Some Rust || n <= 0 || n land (n - 1) <> 0 || List.length targ_tes <> List.length tparams then
++          static_error l "Invalid compiler-exported instance alignment" None;
++        (* An instance mentioning a type that VeriFast does not know gets no fact. *)
++        begin match List.map (check_pure_type ("", []) qtparams Ghost) targ_tes with
++          exception StaticError _ -> ()
++        | targs ->
++        if qtparams = [] then
++          ctxt#assert_term (ctxt#mk_eq (mk_alignof (ctxt#mk_app type_info_func (List.map (typeid_of_core l []) targs))) (ctxt#mk_intlit n))
++        else begin
++          ctxt#begin_formal;
++          let env = List.mapi (fun i x -> (tparam_typeid_varname x, ctxt#mk_bound i ctxt#type_inductive)) qtparams in
++          let a = mk_alignof (ctxt#mk_app type_info_func (List.map (typeid_of_core l env) targs)) in
++          let fact = ctxt#mk_eq a (ctxt#mk_intlit n) in
++          ctxt#end_formal;
++          ctxt#assume_forall (sn ^ "_instance_alignment") [a] (List.map (fun _ -> ctxt#type_inductive) qtparams) fact
++        end
++        end
 +      | _ -> ()) attrs;
      let packed = List.mem Packed attrs in
      let repr_c = dialect <> Some Rust || List.mem ReprC attrs in
      assume_axiom (fun _ _ s -> (sn ^ "_size_limits", s, ctxt#mk_and (ctxt#mk_lt (ctxt#mk_intlit 0) s) (ctxt#mk_le s max_uintptr_term)));
+@@ -7036,6 +7077,9 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+               | Some bs -> (targs, bs, [])
+           in
+           if List.length ps0 <> List.length ts0 then static_error l "Incorrect number of indexes." None;
++          (* The arguments of a generic predicate constructor have types that mention
++             its type parameters, like the predicate's own parameters. *)
++          let ts0 = List.map (instantiate_type tpenv) ts0 in
+           let (wps0, tenv) = check_pats (pn,ilist) l tparams tenv ts0 ps0 in
+           let xs' = List.map (instantiate_type tpenv) xs in
+           let (wps, tenv) = check_pats (pn,ilist) l tparams tenv xs' ps in
+diff --git a/tests/rust/assoc_type_projection.rs b/tests/rust/assoc_type_projection.rs
+new file mode 100644
+index 0000000..0d79f19
+--- /dev/null
++++ b/tests/rust/assoc_type_projection.rs
+@@ -0,0 +1,30 @@
++// A struct whose field type is a projection of an associated type with an
++// explicit or implicit Sized bound.
++use std::cell::UnsafeCell;
++
++pub trait Primitive {
++    type Storage;
++}
++
++pub trait ExplicitlySized {
++    type Storage: Sized;
++}
++
++impl Primitive for u8 {
++    type Storage = u8;
++}
++
++#[repr(C)]
++pub struct Cell<T: Primitive> {
++    v: UnsafeCell<T::Storage>,
++}
++
++#[repr(C)]
++pub struct Cell2<T: ExplicitlySized> {
++    v: T::Storage,
++}
++
++pub fn smoke()
++//@ req true;
++//@ ens true;
++{}
+diff --git a/tests/rust/instance_alignment.rs b/tests/rust/instance_alignment.rs
+new file mode 100644
+index 0000000..128e428
+--- /dev/null
++++ b/tests/rust/instance_alignment.rs
+@@ -0,0 +1,34 @@
++// Rustc's alignment for instances of a generic struct that appear in local
++// function signatures.
++#[repr(C, align(2))]
++pub struct Align2<T>(T);
++
++#[repr(C)]
++pub struct Wrap<T> {
++    x: T,
++}
++
++pub fn concrete(_p: *mut Align2<u8>, _q: *mut Wrap<u64>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Align2<u8> >() == 2;
++    //@ assert std::mem::align_of::<Wrap<u64> >() == 8;
++}
++
++// The layout of Wrap<*mut T> does not depend on T: Sized.
++pub fn generic<T>(_p: *mut Wrap<*mut T>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Wrap<*mut T> >() == std::mem::size_of::<usize>();
++}
++
++pub fn not_exported(_p: *mut Wrap<u32>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Wrap<u16> >() == 2; //~should_fail
++}
++
++fn main() {}
+diff --git a/tests/rust/macro_fn_specs.rs b/tests/rust/macro_fn_specs.rs
+new file mode 100644
+index 0000000..dbda5cb
+--- /dev/null
++++ b/tests/rust/macro_fn_specs.rs
+@@ -0,0 +1,17 @@
++// Annotations written in a macro body apply to every expansion of the macro.
++macro_rules! constant_fn {
++    ($name:ident, $value:expr) => {
++        pub fn $name() -> i32
++        //@ req true;
++        //@ ens result == 1; //~should_fail
++        {
++            $value
++        }
++    };
++}
++
++constant_fn!(one, 1);
++// Without a shared contract, the second expansion would be skipped as specless.
++constant_fn!(two, 2);
++
++fn main() {}
+diff --git a/tests/rust/pred_ctor_generic_args.rs b/tests/rust/pred_ctor_generic_args.rs
+new file mode 100644
+index 0000000..9bf4b33
+--- /dev/null
++++ b/tests/rust/pred_ctor_generic_args.rs
+@@ -0,0 +1,34 @@
++// A generic predicate constructor applied in a generic lemma's contract. Its
++// arguments must be checked against its instantiated parameter types.
++struct Wrap<T> {
++    x: T,
++}
++
++/*@
++
++pred_ctor holds<T>(p: *T)(;) = *p |-> ?v;
++
++lem wrap_holds<V>(p: *Wrap<V>)
++    req [?f]holds::<Wrap<V> >(p)();
++    ens [f](*p |-> ?v);
++{
++    open [f]holds::<Wrap<V> >(p)();
++}
++
++lem wrap_holds_inferred<V>(p: *Wrap<V>)
++    req [?f]holds(p)();
++    ens [f](*p |-> ?v);
++{
++    open [f]holds::<Wrap<V> >(p)();
++}
++
++lem wrap_holds_bad<V>(p: *Wrap<V>, q: *V)
++    req [?f]holds::<Wrap<V> >(q)(); //~should_fail
++    ens true;
++{
++    assume(false);
++}
++
++@*/
++
++fn main() {}
+diff --git a/tests/rust/purely_unsafe/atomic_intrinsics.rs b/tests/rust/purely_unsafe/atomic_intrinsics.rs
+new file mode 100644
+index 0000000..786dee7
+--- /dev/null
++++ b/tests/rust/purely_unsafe/atomic_intrinsics.rs
+@@ -0,0 +1,34 @@
++// Atomic intrinsics with const-generic orderings, for concrete and generic operands.
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++unsafe fn load_u16(p: *mut u16) -> u16
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_);
++//@ ens [f]std::intrinsics::atomic_points_to(p, perm, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_load::<u16, { AO::Acquire }, false>(p) }
++}
++
++unsafe fn store<T: Copy, const VOLATILE: bool>(p: *mut T, v: T)
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_);
++{
++    unsafe { intrinsics::atomic_store::<T, { AO::Release }, VOLATILE>(p, v) }
++}
++
++unsafe fn swap<T: Copy>(p: *mut T, v: T) -> T
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_xchg::<T, { AO::AcqRel }>(p, v) }
++}
++
++unsafe fn store_read_only(p: *mut u16)
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_) &*& perm != 1 &*& inv_(0) == true;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_store::<u16, { AO::Relaxed }, false>(p, 0) } //~should_fail
++}
++
++fn main() {}
+diff --git a/tests/rust/purely_unsafe/atomic_intrinsics_bad_ordering.rs b/tests/rust/purely_unsafe/atomic_intrinsics_bad_ordering.rs
+new file mode 100644
+index 0000000..58ee012
+--- /dev/null
++++ b/tests/rust/purely_unsafe/atomic_intrinsics_bad_ordering.rs
+@@ -0,0 +1,13 @@
++// An illegal ordering at an atomic intrinsic call is a static error.
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++unsafe fn release_load(p: *mut u8) -> u8
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_);
++//@ ens [f]std::intrinsics::atomic_points_to(p, perm, inv_);
++{
++    unsafe { intrinsics::atomic_load::<u8, { AO::Release }, false>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/const_args_orig.rs b/tests/rust/refinement_checker/const_args_orig.rs
+new file mode 100644
+index 0000000..7f99003
+--- /dev/null
++++ b/tests/rust/refinement_checker/const_args_orig.rs
+@@ -0,0 +1,9 @@
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++pub unsafe fn load<T: Copy, const VOLATILE: bool>(p: *const T) -> T {
++    unsafe { intrinsics::atomic_load::<T, { AO::Acquire }, VOLATILE>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/const_args_verified.rs b/tests/rust/refinement_checker/const_args_verified.rs
+new file mode 100644
+index 0000000..bcaddc3
+--- /dev/null
++++ b/tests/rust/refinement_checker/const_args_verified.rs
+@@ -0,0 +1,12 @@
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++pub unsafe fn load<T: Copy, const VOLATILE: bool>(p: *const T) -> T
++//@ req true;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<T, { AO::Acquire }, VOLATILE>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/const_args_verified_bad.rs b/tests/rust/refinement_checker/const_args_verified_bad.rs
+new file mode 100644
+index 0000000..b47feb3
+--- /dev/null
++++ b/tests/rust/refinement_checker/const_args_verified_bad.rs
+@@ -0,0 +1,12 @@
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++pub unsafe fn load<T: Copy, const VOLATILE: bool>(p: *const T) -> T
++//@ req true;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<T, { AO::SeqCst }, VOLATILE>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/testsuite.mysh b/tests/rust/refinement_checker/testsuite.mysh
+index ec62e86..2dd73ad 100644
+--- a/tests/rust/refinement_checker/testsuite.mysh
++++ b/tests/rust/refinement_checker/testsuite.mysh
+@@ -1,6 +1,8 @@
+ begin_parallel
+   !refinement-checker missing_func_orig.rs missing_func_verified.rs
+   refinement-checker basic_orig.rs basic_verified.rs
++  refinement-checker const_args_orig.rs const_args_verified.rs
++  !refinement-checker const_args_orig.rs const_args_verified_bad.rs
+   !refinement-checker basic_orig.rs basic_verified_bad1.rs
+   !refinement-checker basic_orig.rs basic_verified_bad2.rs
+   refinement-checker loop_orig.rs loop_verified.rs
+diff --git a/tests/rust/testsuite.mysh b/tests/rust/testsuite.mysh
+index 3c5ed1d..4f927c2 100644
+--- a/tests/rust/testsuite.mysh
++++ b/tests/rust/testsuite.mysh
+@@ -17,6 +17,10 @@ verifast -allow_should_fail -allow_dead_code assume_stmt.rs
+ verifast hidden_locals.rs
+ verifast -allow_should_fail -allow_dead_code this_pred.rs
+ verifast use_decls_in_modules.rs
++verifast -skip_specless_fns assoc_type_projection.rs
++verifast -allow_should_fail -allow_assume -allow_dead_code pred_ctor_generic_args.rs
++verifast -allow_should_fail macro_fn_specs.rs
++verifast -allow_should_fail -allow_dead_code instance_alignment.rs
+ begin_sequential
+ cd unverified
+   cd platform
+@@ -33,6 +37,8 @@ popd
+ verifast -ignore_ref_creation -allow_assume nonnull.rs
+ verifast -skip_specless_fns nonnull_into.rs
+ cd purely_unsafe
++  verifast -allow_should_fail -allow_dead_code atomic_intrinsics.rs
++  !verifast atomic_intrinsics_bad_ordering.rs
+   verifast enum_discr.rs
+   verifast -ignore_unwind_paths leftpad.rs
+   verifast arrays.rs
