@@ -31,6 +31,30 @@ const _: () = {
 """
 
 
+def constructor_cast(source, operand, atomic_type, *, annotated=False):
+    """Extract the checked cast before rustc can erase reference formation."""
+    signature = f"pub const unsafe fn from_ptr<'a>(ptr: *mut {operand}) -> &'a {atomic_type}"
+    if source.count(signature) != 1:
+        raise SystemExit(f"Expected one constructor with signature {signature}")
+    tail = source.split(signature, 1)[1]
+    tail = re.sub(r"(?m)^\s*//[^\n]*$", "", tail)
+    if annotated:
+        tail = re.sub(r"/\*@.*?@\*/", "", tail, flags=re.S)
+        pattern = r"\s*\{\s*let result = (unsafe \{[^{}]+\});\s*result\s*\}"
+    else:
+        pattern = r"\s*\{\s*(unsafe \{[^{}]+\})\s*\}"
+    match = re.match(pattern, tail)
+    if not match:
+        raise SystemExit(f"Unexpected constructor body for {atomic_type}")
+    return re.sub(r"\s+", "", match[1])
+
+
+def check_constructor_source(source, specialized, operand, atomic_type, source_types):
+    expected = constructor_cast(source, *source_types)
+    if constructor_cast(specialized, operand, atomic_type, annotated=True) != expected:
+        raise SystemExit(f"Source cast differs for {atomic_type}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verifast_bin", type=Path)
@@ -56,6 +80,10 @@ def main():
     configs = {target: subprocess.check_output([rustc, "--target", target, "--print", "cfg"], text=True)
                for target in (HOST, WIDE)}
     template = Template((here / "slot-constructor.rs.in").read_text())
+    check_constructor_source(
+        atomic.decode(), (here / "bool-constructor.rs").read_text(), "bool", "AtomicBool",
+        ("bool", "AtomicBool"),
+    )
     crate = runpy.run_path(str(here / "probe-verifast.py"))["CRATE"]
     normalized = re.sub(r"(?m)^#\[rustc_diagnostic_item = ", "#[doc = ", atomic.decode())
     cases = [(f"{sign}{bits}", bits, HOST if bits < 128 else WIDE)
@@ -81,6 +109,7 @@ def main():
             case_logs.mkdir(exist_ok=True)
             source = template.substitute(POINTEE="", OPERAND=operand, FIELD=operand, ATOMIC=name,
                                          WIDTH=width, ALIGN_LEMMA=f"atomic_align_of_{operand}()")
+            check_constructor_source(atomic.decode(), source, operand, name, ("$int_type", "$atomic_type"))
             bridge = Template(BRIDGE).substitute(OPERAND=operand, ATOMIC=name, WIDTH=width)
             (work / "atomic.rs").write_text(normalized + bridge.replace(
                 "#[unsafe(no_mangle)]",
@@ -132,6 +161,10 @@ def main():
             coverage[name] = {"target": target, "bytes": width, "required": not operand.endswith("size")}
             print(f"{name} passed on {target}", flush=True)
 
+    check_constructor_source(
+        atomic.decode(), template.template, "$OPERAND", "$ATOMIC",
+        ("*mut T", "AtomicPtr<T>"),
+    )
     for check, log_dir in (("check-bool-constructor.py", "bool"), ("check-ptr.py", "ptr")):
         subprocess.run([sys.executable, here / check, runtime, rustc, logs / log_dir], check=True, env=env)
     coverage["AtomicBool"] = {"target": HOST, "bytes": 1, "required": True}

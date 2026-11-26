@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 
+from llvm_dispatch import function_header
+
 BRIDGE = """
 #[unsafe(no_mangle)]
 pub fn sc_verify_bool_store(a: &AtomicBool, value: bool, order: Ordering) -> bool {
@@ -54,7 +56,8 @@ def normalize_dispatch(ir, operation, atomic_type="bool"):
         raise SystemExit("The compiler did not emit the inline atomic dispatch")
     # Normalize names and metadata. Retain the instruction operands, edges,
     # atomic ordering, volatility, alignment and panic message allocation.
-    text = re.sub(r"(?m)\s*;[^\n]*$", "", match[0])
+    header, _, body = match[0].partition("\n")
+    text = re.sub(r"(?m)\s*;[^\n]*$", "", body)
     text = re.sub(r"\.i(?:\.i)?(?=[:,\s])", ".i", text)
     text = re.sub(r"%(_6)\.i\b", r"%\1", text)
     text = re.sub(r"_R[A-Za-z0-9_]+\.exit\b", "dispatch.exit", text)
@@ -71,7 +74,7 @@ def normalize_dispatch(ir, operation, atomic_type="bool"):
         canonical = {name: f"%ssa{index}" for index, name in enumerate(names)}
         text = re.sub(r"%[\w.]+", lambda match: canonical.get(match[0], match[0]), text)
         text = re.sub(r"!noundef !\d+", "!noundef !id", text)
-    return text
+    return function_header(ir, header, f"sc_verify_{atomic_type}_{operation}") + "\n" + text
 
 
 def run(command, log, env=None):

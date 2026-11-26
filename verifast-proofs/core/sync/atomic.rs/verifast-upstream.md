@@ -30,11 +30,11 @@ on these calls. That blocks `core::sync::atomic` and every client of it.
   a Release load, an Acquire store or a Release compare-exchange failure
   ordering, are static errors.
 * The operand must be an integer, a thin raw pointer or a type parameter. A
-  `VOLATILE` argument must be `false` or a const parameter. Wide pointers,
+  `VOLATILE` argument must be the concrete value `false`. Wide pointers,
   volatile accesses with a literal `true`, mismatched arithmetic operands and
   signed or unsigned mismatches in min and max are rejected.
-* Generic callers verify once against the parametric contract. This lets the
-  generic helpers in `core::sync::atomic` be verified directly.
+* Generic operands use a parametric contract for legal monomorphizations.
+  The helper proof specializes the load and store access flag to `false`.
 * For concrete local structs, the exporter passes rustc's ABI alignment
   (`knownAlignment` in `vf_mir.capnp`). The translator records it as a
   `RustcAbiAlignment` struct attribute. A proof can then derive the alignment
@@ -46,7 +46,9 @@ on these calls. That blocks `core::sync::atomic` and every client of it.
   pointers.
 * It adds contracts for the atomic primitives, stated with the existing
   `atomic_points_to` predicate:
-  * Loads take any fraction and return a value satisfying the slot invariant.
+  * Loads return a value satisfying the slot invariant. On x86-64 and
+    AArch64 Linux, a Relaxed load of at most eight bytes can take a read
+    fraction. Other loads require full byte permission for writable storage.
   * Stores, exchanges, compare-exchanges, min and max need the write
     permission, `atomic_points_to(p, 1, inv)`, and operands that satisfy
     `inv`.

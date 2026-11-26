@@ -2,8 +2,8 @@
 """Verify the generic unsafe atomic helpers of Challenge 7 Part 2.
 
 The helper bodies are copied verbatim from `library/core/src/sync/atomic.rs`
-at replay time. Only the attributes above each function are dropped and a
-VeriFast contract is inserted between the signature and the body. A change
+at replay time. Attributes are dropped, load and store are specialized to ordinary access,
+and a VeriFast contract is inserted between the signature and the body. A change
 to any helper body in the library is therefore verified again, rather than
 compared with a hand-written copy.
 """
@@ -32,10 +32,10 @@ CAS_RESULT = "(match result { Result::Ok(v) => valid(v) == true, Result::Err(v) 
 CONTRACTS = {
     # Invalid orderings panic. The unwind path returns the permission untouched.
     "atomic_store": (f"{WRITE} &*& valid(val) == true", KEEP, KEEP),
-    # A load needs only a read fraction of the slot permission.
-    "atomic_load": ("[?f]std::intrinsics::atomic_points_to(dst, ?p, ?valid)",
-                    "[f]std::intrinsics::atomic_points_to(dst, p, valid) &*& valid(result) == true",
-                    "[f]std::intrinsics::atomic_points_to(dst, p, valid)"),
+    # The generic load accepts every ordinary ordering and width.
+    "atomic_load": ("[?f]std::intrinsics::atomic_points_to(dst, 1, ?valid)",
+                    "[f]std::intrinsics::atomic_points_to(dst, 1, valid) &*& valid(result) == true",
+                    "[f]std::intrinsics::atomic_points_to(dst, 1, valid)"),
     "atomic_swap": (f"{WRITE} &*& valid(val) == true", f"{KEEP} &*& valid(result) == true", "false"),
     "atomic_compare_exchange": (f"{WRITE} &*& valid(old) == true &*& valid(new) == true",
                                 f"{KEEP} &*& {CAS_RESULT}", KEEP),
@@ -100,6 +100,13 @@ def proof_text(source, contracts):
     parts = [HEADER.replace("$VARIANTS", ordering_variants(source))]
     for name in HELPERS:
         signature, body = extract(source, name)
+        if name in ("atomic_load", "atomic_store"):
+            if signature.count(", const VOLATILE: bool") != 1 or body.count("VOLATILE>") != 3:
+                raise SystemExit(f"Unexpected volatile dispatch in {name}")
+            signature = signature.replace(", const VOLATILE: bool", "")
+            body = body.replace("VOLATILE>", "false>")
+            if "VOLATILE" in signature + body:
+                raise SystemExit(f"Unresolved volatile parameter in {name}")
         req, ens, unwind = contracts[name]
         # Panic paths consume the thread token, so every helper threads it through.
         token = "thread_token(currentThread)"
@@ -149,6 +156,26 @@ def main():
     proof = proof_text(source, CONTRACTS)
     subprocess.run([args.rustc.resolve(), *flags.split(), "--emit=metadata",
                     "-o", logs / "generic-helpers.rmeta", "-"], input=proof, text=True, check=True)
+    # Generic helper contracts depend on rustc rejecting ill-typed monomorphizations.
+    # Emitting metadata alone leaves the call unchecked.
+    invalid = {
+        "bool-load": """pub unsafe fn probe(src: *const bool) -> bool {
+            unsafe { atomic_load(src, Relaxed) }
+        }""",
+        "mismatched-add": """pub unsafe fn probe(dst: *mut u16, delta: u8) -> u16 {
+            unsafe { atomic_add(dst, delta, Relaxed) }
+        }""",
+    }
+    for name, caller in invalid.items():
+        probe = logs / f"rustc-reject-{name}.rs"
+        probe.write_text(proof + caller)
+        result = subprocess.run(
+            [args.rustc.resolve(), *flags.split(), "--emit=obj", "-o", probe.with_suffix(".o"), probe],
+            capture_output=True, text=True,
+        )
+        (logs / f"rustc-reject-{name}.log").write_text(result.stdout + result.stderr)
+        if result.returncode == 0 or "error[E0511]: invalid monomorphization" not in result.stderr:
+            raise SystemExit(f"Rustc did not reject the expected operand shape in {probe.name}")
     expect_pass("generic-helpers", proof)
     print(f"Verified the {len(HELPERS)} generic helpers copied from the atomic module.")
 
@@ -161,7 +188,7 @@ def main():
     expect_pass("generic-helpers-no-panic", proof_text(source, strict), ["-allow_dead_code"])
     print("Verified that the helpers do not unwind once invalid orderings are excluded.")
 
-    def mutate(name, contract=None, body=None):
+    def mutate(name, contract=None, body=None, *, volatile=False):
         contracts = dict(CONTRACTS)
         if contract:
             contracts[name] = contract
@@ -171,14 +198,18 @@ def main():
             if text.count(old) != 1:
                 raise SystemExit(f"Expected one occurrence of {old!r}")
             text = text.replace(old, new)
+        if volatile:
+            old = "intrinsics::atomic_load::<T, { AO::Relaxed }, false>"
+            if text.count(old) != 1:
+                raise SystemExit(f"Expected one occurrence of {old!r}")
+            text = text.replace(old, old.replace("false", "VOLATILE"))
         return text
 
     store_req, store_ens, store_unwind = CONTRACTS["atomic_store"]
     controls = [
         ("store-read-fraction",
-         mutate("atomic_store", ("[?f]std::intrinsics::atomic_points_to(dst, ?p, ?valid) &*& valid(val) == true",
-                                 "[f]std::intrinsics::atomic_points_to(dst, p, valid)",
-                                 "[f]std::intrinsics::atomic_points_to(dst, p, valid)")),
+         mutate("atomic_store", tuple(clause.replace("dst, 1,", "dst, 1/2,")
+                                      for clause in CONTRACTS["atomic_store"])),
          "No matching heap chunks: [_]std::intrinsics::atomic_points_to<T>(dst, 1, _)"),
         ("store-invalid-value",
          mutate("atomic_store", (WRITE, store_ens, store_unwind)),
@@ -202,13 +233,18 @@ def main():
          mutate("atomic_compare_exchange", (CONTRACTS["atomic_compare_exchange"][0],
                                             CONTRACTS["atomic_compare_exchange"][1], "false")),
          "Cannot prove condition. (Cannot prove false.)"),
+        ("generic-volatile-load",
+         mutate("atomic_load", body=(
+             "const unsafe fn atomic_load<T: Copy>",
+             "const unsafe fn atomic_load<T: Copy, const VOLATILE: bool>"), volatile=True),
+         "only ordinary accesses (VOLATILE=false) are modeled"),
         ("release-load-intrinsic",
-         mutate("atomic_load", body=("Acquire => intrinsics::atomic_load::<T, { AO::Acquire }, VOLATILE>(dst)",
-                                     "Acquire => intrinsics::atomic_load::<T, { AO::Release }, VOLATILE>(dst)")),
+         mutate("atomic_load", body=("Acquire => intrinsics::atomic_load::<T, { AO::Acquire }, false>(dst)",
+                                     "Acquire => intrinsics::atomic_load::<T, { AO::Release }, false>(dst)")),
          "atomic_load: unsupported ordering"),
         ("acquire-store-intrinsic",
-         mutate("atomic_store", body=("Release => intrinsics::atomic_store::<T, { AO::Release }, VOLATILE>(dst, val)",
-                                      "Release => intrinsics::atomic_store::<T, { AO::Acquire }, VOLATILE>(dst, val)")),
+         mutate("atomic_store", body=("Release => intrinsics::atomic_store::<T, { AO::Release }, false>(dst, val)",
+                                      "Release => intrinsics::atomic_store::<T, { AO::Acquire }, false>(dst, val)")),
          "atomic_store: unsupported ordering"),
     ]
     results = {}

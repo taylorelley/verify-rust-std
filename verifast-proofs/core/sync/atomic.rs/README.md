@@ -10,17 +10,18 @@ for Linux x86-64, and for AArch64 Linux in the 128-bit cases.
 | Challenge 7 item | Proof step | Evidence |
 | --- | --- | --- |
 | Part 1: the 12 `from_ptr` constructors | `constructors` | Each constructor needs a live, initialized slot with the atomic alignment of its type, and holds it for the reference lifetime. All slot values are symbolic. `AtomicPtr` uses pointee sizes 0, 1, 2, 3 and 4 with an unrestricted pointer value. |
-| Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `generic-helpers` | The generic bodies are copied verbatim from the library at replay time and verified against one contract per helper. |
+| Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `generic-helpers` | The helper bodies are extracted from the library at replay time. Load and store specialize the access flag to ordinary access. Each helper has a verified contract. |
 | Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The public wrappers unwind on invalid orderings with every resource intact. |
 | Part 3: intrinsic contracts | `verifast-26.10-u8-store.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
-| Public methods and instantiations | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | Every public wrapper on `AtomicBool`, all integer widths and `AtomicPtr` at five pointee sizes, connected to the library by compiled MIR and LLVM comparison. |
+| Public methods and instantiations | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | The direct ordinary operation wrappers covered by the replay matrix, including integer widths and five pointer pointee sizes. The matrix records the supported methods. Callback-based updates and indirect convenience wrappers have no dedicated proof here. |
 
 The listed undefined behaviors are excluded as follows:
 
 * **Data races.** An atomic slot permission rules out non-atomic and mixed-size
-  writes to the slot. A read needs only a fraction of the permission, and a
-  write needs all of it. VeriFast checks these fractions through the
-  primitive contracts.
+  writes to the slot. Writes, wide loads and Acquire or SeqCst loads require
+  full underlying byte permission, which supplies writable Rust storage.
+  Small Relaxed loads can use a read fraction on the two checked targets.
+  The outer share fraction represents sharing between atomic users.
 * **Dangling or misaligned access.** The slot permission can only be created
   from a live points-to resource whose address is aligned for atomic access
   at the slot type.
@@ -32,6 +33,9 @@ The listed undefined behaviors are excluded as follows:
 * **Intrinsic UB.** The frontend admits only legal orderings and supported
   operand types at intrinsic calls, so illegal orderings fail to verify.
 
+The Boolean and integer/pointer constructor permission proofs were adapted
+from the earlier VeriFast submission by jellllly420. [PR #675](https://github.com/model-checking/verify-rust-std/pull/675)
+
 ## Trusted base
 
 1. The intrinsic contracts and atomic permission lemmas in the VeriFast patch.
@@ -42,10 +46,16 @@ The listed undefined behaviors are excluded as follows:
    to VeriFast 26.10 and to the current master. Once a VeriFast release includes
    it, the repository's pinned release can replace it. See
    [`verifast-upstream.md`](verifast-upstream.md).
-3. The per-type wrapper proofs: a specialized copy of each public wrapper is
+3. The per-type wrapper proofs: a specialized copy of each covered public wrapper is
    verified, then compared with the compiled library code by the replay
-   scripts. The generic helper proof uses the library text directly and needs
-   no comparison.
+   scripts. The LLVM comparison checks function signatures and resolved
+   attributes alongside dispatch. A source-level check separately compares
+   the constructor cast expressions before lowering. The LLVM comparison
+   is evidence about the generated code.
+   The proof still relies on review of Rust-level obligations erased or
+   assumed during lowering, including provenance, initialization and borrows.
+   The helper proof uses the extracted library text with the stated
+   ordinary-access specialization.
 
 [`review-guide.md`](review-guide.md) maps each claim to its evidence and lists
 the checks a reviewer should repeat.
@@ -104,12 +114,11 @@ RUSTUP_TOOLCHAIN=nightly-2026-09-25 \
 The runner copies the 15 helpers from `atomic.rs`, removes their attributes
 and adds one contract to each. It type-checks the result with the source
 nightly and verifies it. The contracts are generic over `T` (and `U` for the
-operand of arithmetic and bitwise operations), and over `VOLATILE` for load and
-store:
+operand of arithmetic and bitwise operations):
 
 | Helper | Requires | Ensures |
 | --- | --- | --- |
-| `atomic_load` | a read fraction `[f]atomic_points_to(dst, p, valid)` | the same fraction, and `valid(result)` |
+| `atomic_load` | writable backing `[f]atomic_points_to(dst, 1, valid)` | the same fraction, and `valid(result)` |
 | `atomic_store` | write permission `atomic_points_to(dst, 1, valid)` and `valid(val)` | the permission |
 | `atomic_swap`, `atomic_max`, `atomic_min`, `atomic_umax`, `atomic_umin` | write permission and `valid(val)` | the permission and `valid(result)` |
 | `atomic_compare_exchange`, `atomic_compare_exchange_weak` | write permission, `valid(old)` and `valid(new)` | the permission and a valid value in `Ok` or `Err` |
@@ -127,8 +136,12 @@ exchange or maximum with an invalid value, a store with no permission,
 addition on a restricted slot, the unwinding paths when the ordering contract
 is missing, and a Release load or Acquire store substituted into a helper body.
 
-For `VOLATILE` the generic contract is the ordinary-access contract. It is at
-least as strong as what a volatile access requires. AtomicBool's AND, OR and XOR
+The load and store proof specializes only `VOLATILE=false`. The frontend
+rejects calls whose volatility is either true or unresolved. For generic
+operand types the helper proof applies to legal Rustc monomorphizations.
+Rustc enforces operand constraints during code generation. The replay
+checks rejection of a Boolean load and an add with mismatched integer types,
+and the concrete matrix checks supported operands and orderings. AtomicBool's AND, OR and XOR
 paths use the narrower Boolean invariant, which the generic contract does not
 cover. They are verified in the `bitwise` step instead.
 
@@ -191,8 +204,10 @@ VeriFast 26.10 fails on the enum-valued const argument in the reduced
 direct intrinsic call. The Boolean replay uses `u8`. The patched verifier
 also accepts the other integer widths and thin pointers. Load and store
 each accept three legal orderings with `VOLATILE = false`. Loads preserve
-the supplied read permission and return a value satisfying the slot
-invariant. Stores require full byte permission and an input that satisfies
+the supplied permission and return a value satisfying the slot invariant.
+On x86-64 and AArch64 Linux, only Relaxed loads of at most eight bytes may use
+a fraction of the underlying permission. The remaining loads require writable
+Rust storage. Stores require full byte permission and an input that satisfies
 the invariant.
 
 To reproduce on Linux x86-64, use Rustup with the two nightlies above.
@@ -544,8 +559,9 @@ The matrix covers the ten fixed-width and two pointer-width integer
 types. The 128-bit cases use the AArch64 Linux target. The specialized
 programs verify all 72 legal load and store branches and 48 invalid
 ordering panic branches. Unwinding preserves the thread and lifetime
-tokens. Each case proves a fractional read and rejects a store with
-that same fractional permission. The verifier continues to reject
+tokens. The narrower cases prove a fractional Relaxed read and reject a store with
+that same permission. The 128-bit cases reject fractional Relaxed reads, and
+all cases reject fractional Acquire reads. The verifier continues to reject
 volatile access and illegal intrinsic orderings.
 
 The replay checks the slot layout and compares optimized LLVM dispatch

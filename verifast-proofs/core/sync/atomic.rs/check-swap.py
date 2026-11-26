@@ -13,6 +13,8 @@ from string import Template
 import subprocess
 import tempfile
 
+from llvm_dispatch import function_header
+
 FLAGS = ["--edition=2024", "--crate-type=lib"]
 ORDERS = {
     "Relaxed": "monotonic", "Acquire": "acquire", "Release": "release",
@@ -46,7 +48,8 @@ def canonical_dispatch(ir, name="sc_verify_swap"):
     canonical = {ssa or "%" + block: f"%id{index}" for index, (ssa, block) in enumerate(names)}
     body = re.sub(r"%[\w.]+", lambda m: canonical.get(m[0], m[0]), body)
     body = re.sub(r"(?m)^([\w.]+):", lambda m: canonical["%" + m[1]][1:] + ":", body)
-    return re.sub(r" !prof !\d+", "", body)
+    header = function_header(ir, match[0].splitlines()[0], name)
+    return header + "\n" + re.sub(r" !prof !\d+", "", body)
 
 
 def main():

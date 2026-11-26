@@ -15,7 +15,8 @@ def store_declaration(source):
     # Include the ordering enum and all adjacent atomic intrinsic declarations.
     start = source.index("pub enum AtomicOrdering {")
     end = source.index("pub const unsafe fn atomic_xchg", start)
-    return source[start:end]
+    lines = source[start:end].splitlines(keepends=True)
+    return "".join(line for line in lines if not line.lstrip().startswith("/// [`Ordering::"))
 
 
 def main():

@@ -1,11 +1,11 @@
 diff --git a/bin/rust/std/lib.rsspec b/bin/rust/std/lib.rsspec
-index a5d925d..e457448 100644
+index a5d925d..be2b195 100644
 --- a/bin/rust/std/lib.rsspec
 +++ b/bin/rust/std/lib.rsspec
 @@ -148,6 +148,13 @@ mod num {
          
      }
- 
+
 +    impl usize {
 +        fn wrapping_mul(self: usize, other: usize) -> usize;
 +        //@ req true;
@@ -67,23 +67,29 @@ index a5d925d..e457448 100644
      lem_auto atomic_align_of_usize();
          req true;
          ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
-@@ -358,6 +409,135 @@ mod intrinsics {
+@@ -358,6 +409,141 @@ mod intrinsics {
      //@ ens [f]atomic_points_to(dst, 1, inv_);
      //@ on_unwind_ens false;
      
-+    // Loads accept a read fraction. Stores require the full byte permission.
++    // Full byte permission denotes writable Rust storage. Only a small
++    // Relaxed load on a supported target can use a mere read fraction.
 +
 +    unsafe fn atomic_load_relaxed<T>(src: *const T) -> T;
-+    //@ req [?f]atomic_points_to(src as *T, ?permission, ?valid);
-+    //@ ens [f]atomic_points_to(src as *T, permission, valid) &*& valid(result) == true;
++    //@ req [?f]atomic_points_to(src as *T, 1, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, 1, valid) &*& valid(result) == true;
 +    //@ on_unwind_ens false;
 +
 +    unsafe fn atomic_load_acquire<T>(src: *const T) -> T;
-+    //@ req [?f]atomic_points_to(src as *T, ?permission, ?valid);
-+    //@ ens [f]atomic_points_to(src as *T, permission, valid) &*& valid(result) == true;
++    //@ req [?f]atomic_points_to(src as *T, 1, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, 1, valid) &*& valid(result) == true;
 +    //@ on_unwind_ens false;
 +
 +    unsafe fn atomic_load_seqcst<T>(src: *const T) -> T;
++    //@ req [?f]atomic_points_to(src as *T, 1, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_load_relaxed_up_to_eight_bytes<T>(src: *const T) -> T;
 +    //@ req [?f]atomic_points_to(src as *T, ?permission, ?valid);
 +    //@ ens [f]atomic_points_to(src as *T, permission, valid) &*& valid(result) == true;
 +    //@ on_unwind_ens false;
@@ -201,7 +207,7 @@ index a5d925d..e457448 100644
 +    //@ on_unwind_ens false;
 +
  }
- 
+
  mod mem {
 diff --git a/src/frontend/ast.ml b/src/frontend/ast.ml
 index e55645c..ce24504 100644
@@ -238,7 +244,7 @@ index 9e81d09..9ebb571 100644
      isReprC @11: Bool;
 +    knownAlignment @12: UInt64; # Zero if unavailable or generic.
  }
- 
+
  enum AliasTyKind {
 @@ -312,6 +313,7 @@ struct TyKind {
      struct RawPtrTy {
@@ -246,7 +252,7 @@ index 9e81d09..9ebb571 100644
          mutability @1: Mutability;
 +        isThin @2: Bool; # Concrete pointer has a single scalar layout.
      }
- 
+
      struct RefTy {
 diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
 index 9621ba9..6c38097 100644
@@ -264,7 +270,7 @@ index 9621ba9..6c38097 100644
 +                }
 +            }
          }
- 
+
          fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
 @@ -1826,9 +1833,19 @@ use rustc_span::RemapPathScopeComponents;
                      Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
@@ -290,16 +296,16 @@ index 9621ba9..6c38097 100644
                  ty::TyKind::Ref(region, ty, mutability) => {
                      let ref_ty_cpn = ty_kind_cpn.init_ref();
 diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-index 4e237a6..44b4ba5 100644
+index 4e237a6..9ae75a3 100644
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -1456,6 +1456,140 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -1456,6 +1456,149 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
- 
+
 +  (* Dispatch concrete atomic operations to the matching primitive contract.
 +     The pinned compiler exports AtomicOrdering as the enum variant index. *)
-+  and specialize_atomic_access (fn_ty : D.ty_kind_fn_def_ty) loc =
++  and specialize_atomic_access small_relaxed_loads (fn_ty : D.ty_kind_fn_def_ty) loc =
 +    match fn_ty.id.name with
 +    | ("core::intrinsics::atomic_store" | "std::intrinsics::atomic_store" |
 +       "core::intrinsics::atomic_load" | "std::intrinsics::atomic_load" |
@@ -349,9 +355,8 @@ index 4e237a6..44b4ba5 100644
 +               }}}] when has_volatile_arg ->
 +                if Stdint.Uint128.to_string (DecoderAux.uint128_get volatile) <> "0" then
 +                  reject "only ordinary accesses (VOLATILE=false) are modeled"
-+            (* A generic VOLATILE flag gets the ordinary-access contract. It is
-+               at least as strong as the requirements of a volatile access. *)
-+            | [{kind = Const {kind = Param _}}] when has_volatile_arg -> ()
++            | [{kind = Const {kind = Param _}}] when has_volatile_arg ->
++                reject "only ordinary accesses (VOLATILE=false) are modeled"
 +            | _ -> shape_error ());
 +            let suffix =
 +              match Stdint.Uint128.to_string (DecoderAux.uint128_get order) with
@@ -362,7 +367,17 @@ index 4e237a6..44b4ba5 100644
 +              | "4" -> "seqcst"
 +              | _ -> reject "unsupported ordering for an ordinary access"
 +            in
-+            let contract = if extremum then "safety" else suffix in
++            let contract =
++              if extremum then "safety"
++              else if operation = "atomic_load" && suffix = "relaxed" && small_relaxed_loads
++                      && (match operand_type with
++                          | Int (I8 | I16 | I32 | I64 | ISize)
++                          | UInt (U8 | U16 | U32 | U64 | USize)
++                          | RawPtr {is_thin = true; _} -> true
++                          | _ -> false)
++              then "relaxed_up_to_eight_bytes"
++              else suffix
++            in
 +            Some ("std::intrinsics::" ^ operation ^ "_" ^ contract, [operand])
 +        | _ -> shape_error ())
 +    | ("core::intrinsics::atomic_cxchg" | "std::intrinsics::atomic_cxchg" |
@@ -434,7 +449,15 @@ index 4e237a6..44b4ba5 100644
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -2386,17 +2520,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -1929,6 +2072,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+   type body_tr_defs_ctx = {
+     adt_defs : Mir.adt_def_tr list;
+     directives : Mir.annot list;
++    small_relaxed_loads : bool;
+     fn_specializer : string -> D.generic_arg list -> string * D.generic_arg list;
+   }
+
+@@ -2386,17 +2530,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -449,7 +472,7 @@ index 4e237a6..44b4ba5 100644
 -          in
            let fn_name, substs_cpn =
 -            Args.body_tr_defs_ctx.fn_specializer fn_name substs_cpn
-+            match specialize_atomic_access fn_def_ty_cpn call_loc with
++            match specialize_atomic_access Args.body_tr_defs_ctx.small_relaxed_loads fn_def_ty_cpn call_loc with
 +            | Some specialization -> specialization
 +            | None ->
 +                let substs = fn_def_ty_cpn.substs in
@@ -462,7 +485,7 @@ index 4e237a6..44b4ba5 100644
            in
            let* substs =
              ListAux.try_map
-@@ -6278,7 +6412,14 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -6278,7 +6422,14 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -478,7 +501,7 @@ index 4e237a6..44b4ba5 100644
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7777,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -7636,8 +7787,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -488,7 +511,22 @@ index 4e237a6..44b4ba5 100644
 +        RawPtr { ty = ty2; mutability = mut2; _ } ) ->
          if mut1 = mut2 then match_types env ty1 ty2 else None
      | _ -> None
- 
+
+@@ -8106,8 +8257,13 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+             bodies_cpn
+         else bodies_cpn
+       in
++      let small_relaxed_loads =
++        match VfMirRd.VfMir.target_triple_get vf_mir_cpn with
++        | "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" -> true
++        | _ -> false
++      in
+       let body_tr_defs_ctx =
+-        { adt_defs; directives = vf_mir_translator_directives; fn_specializer }
++        { adt_defs; directives = vf_mir_translator_directives; small_relaxed_loads; fn_specializer }
+       in
+       let* bodies_tr_res =
+         Rocq_writer.rocq_print Args.rocq_writer "Definition bodies := ";
 diff --git a/src/verifast1.ml b/src/verifast1.ml
 index e0bff63..2a6bb96 100644
 --- a/src/verifast1.ml

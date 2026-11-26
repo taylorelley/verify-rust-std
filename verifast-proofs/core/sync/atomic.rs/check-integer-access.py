@@ -91,7 +91,10 @@ def main():
 
             signature = f"impl {atomic_type} {{\n"
             text = header + replace(slot, signature, signature + specialize(methods))
-            text += "\n" + specialize(helpers).replace("read_pointer_fraction", "read_fraction")
+            text += "\n" + specialize(helpers).replace("read_pointer_fraction", "read_slot")
+            wide = bits == 128
+            if wide:
+                text = text.replace("atomic_points_to(src, 1/2,", "atomic_points_to(src, 1,")
             layout = Template(swap["INTEGER_LAYOUT"]).substitute(TYPE=atomic_type, WIDTH=width)
             bridge = BRIDGE.substitute(ATOMIC=atomic_type, OPERAND=operand)
             stable_bridge = bridge.replace(
@@ -125,6 +128,16 @@ def main():
                     raise SystemExit(f"Unexpected result in {operand}/{label}.log")
 
             expected = compile_dispatch(original, "original")
+            if operand == "u128":
+                bridge_ir = (case_logs / "original.ll").read_text()
+                header_change, count = re.subn(
+                    r"(?m)^(define .*@sc_integer_load\([^\n]*?%_0, ptr [^\n]*?nonnull align )16(\b)",
+                    r"\g<1>32\2", bridge_ir,
+                )
+                normalize = swap["canonical_dispatch"]
+                if count != 1 or normalize(header_change, "sc_integer_load") == normalize(bridge_ir, "sc_integer_load"):
+                    raise SystemExit("Source comparison accepted stronger alignment on the load bridge")
+                (case_logs / "changed-header-alignment.ll").write_text(header_change)
             proof.write_text(text + layout + bridge)
             if compile_dispatch(proof, "specialized") != expected:
                 raise SystemExit(f"Compiled load or store differs for {atomic_type}")
@@ -147,11 +160,21 @@ def main():
             verify(text, "proof", ("0 errors found", f"target: {target}",
                   *(f"Verifying function '{name}'" for name in (
                       f"{atomic_type}::load", f"{atomic_type}::store",
-                      "atomic_load", "atomic_store", "read_fraction",
+                      "atomic_load", "atomic_store", "read_slot",
                   ))))
             load = f"intrinsics::atomic_load::<{operand}, {{ AO::Relaxed }}, false>(src as *const {operand})"
             store = f"intrinsics::atomic_store::<{operand}, {{ AO::Relaxed }}, false>(src, 0); 0"
-            verify(replace(text, load, store), "reject-fractional-write",
+            if wide:
+                fractional = text.replace("atomic_points_to(src, 1,", "atomic_points_to(src, 1/2,")
+                verify(fractional, "reject-wide-fractional-load",
+                       ("No matching heap chunks: [_]std::intrinsics::atomic_points_to",), reject=True)
+            else:
+                verify(replace(text, load, store), "reject-fractional-write",
+                       ("No matching heap chunks: [_]std::intrinsics::atomic_points_to",), reject=True)
+            acquire = replace(text, load, load.replace("Relaxed", "Acquire"))
+            if wide:
+                acquire = acquire.replace("atomic_points_to(src, 1,", "atomic_points_to(src, 1/2,")
+            verify(acquire, "reject-fractional-acquire",
                    ("No matching heap chunks: [_]std::intrinsics::atomic_points_to",), reject=True)
             if operand in ("i8", "u128"):
                 verify(replace(text, load, load.replace("false", "true")), "reject-volatile",
@@ -160,7 +183,7 @@ def main():
                        ("unsupported ordering for an ordinary access",), reject=True)
             coverage[operand] = {
                 "target": target, "load": list(ORDERS["load"]), "store": list(ORDERS["store"]),
-                "panic_branches": 4, "fractional_read": True,
+                "panic_branches": 4, "fractional_relaxed_read": not wide,
             }
 
         for bits in matrix["WIDTHS"]:
