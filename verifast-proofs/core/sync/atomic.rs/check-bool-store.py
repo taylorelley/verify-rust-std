@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 
-from llvm_dispatch import function_header
+from llvm_dispatch import function_header, resolve_attribute_groups
 
 BRIDGE = """
 #[unsafe(no_mangle)]
@@ -62,7 +62,6 @@ def normalize_dispatch(ir, operation, atomic_type="bool"):
     text = re.sub(r"%(_6)\.i\b", r"%\1", text)
     text = re.sub(r"_R[A-Za-z0-9_]+\.exit\b", "dispatch.exit", text)
     text = re.sub(r" !prof !\d+", "", text)
-    text = re.sub(r" #\d+(?=\s|$)", "", text)
     text = re.sub(r"dereferenceable\(24\) @alloc_[0-9a-f]+", "dereferenceable(24) @location", text)
     if operation == "load":
         text = re.sub(r"%(?:_0|value)\.sroa\.0\.0\.i\b", "%loaded", text)
@@ -74,7 +73,7 @@ def normalize_dispatch(ir, operation, atomic_type="bool"):
         canonical = {name: f"%ssa{index}" for index, name in enumerate(names)}
         text = re.sub(r"%[\w.]+", lambda match: canonical.get(match[0], match[0]), text)
         text = re.sub(r"!noundef !\d+", "!noundef !id", text)
-    return function_header(ir, header, f"sc_verify_{atomic_type}_{operation}") + "\n" + text
+    return function_header(ir, header, f"sc_verify_{atomic_type}_{operation}") + "\n" + resolve_attribute_groups(ir, text)
 
 
 def run(command, log, env=None):

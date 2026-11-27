@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 
+from constructor_mir import compare_constructor_mir, upstream_storage_check
+
 HOST = "x86_64-unknown-linux-gnu"
 WIDE = "aarch64-unknown-linux-gnu"
 WIDTHS = (8, 16, 32, 64, 128)
@@ -46,6 +48,8 @@ def constructor_cast(source, operand, atomic_type, *, annotated=False):
     match = re.match(pattern, tail)
     if not match:
         raise SystemExit(f"Unexpected constructor body for {atomic_type}")
+    if re.fullmatch(r"unsafe\s*\{\s*&\s*\*\s*ptr\.cast\(\)\s*\}", match[1]) is None:
+        raise SystemExit(f"Unexpected pointer cast for {atomic_type}")
     return re.sub(r"\s+", "", match[1])
 
 
@@ -111,7 +115,8 @@ def main():
                                          WIDTH=width, ALIGN_LEMMA=f"atomic_align_of_{operand}()")
             check_constructor_source(atomic.decode(), source, operand, name, ("$int_type", "$atomic_type"))
             bridge = Template(BRIDGE).substitute(OPERAND=operand, ATOMIC=name, WIDTH=width)
-            (work / "atomic.rs").write_text(normalized + bridge.replace(
+            storage = upstream_storage_check(atomic.decode(), width, operand, name)
+            (work / "atomic.rs").write_text(normalized + storage + bridge.replace(
                 "#[unsafe(no_mangle)]",
                 '#[stable(feature = "atomic_source_proof", since = "1.0.0")]\n#[unsafe(no_mangle)]',
             ))
@@ -127,6 +132,7 @@ def main():
 
             upstream = compile_constructor(original, "original")
             proof.write_text(source + bridge)
+            compare_constructor_mir(rustc, flags, original, proof, case_logs, operand, name)
             if compile_constructor(proof, "specialized") != upstream:
                 raise SystemExit(f"Compiled {name} constructor differs")
             proof.write_text(replace(source, "&*ptr.cast()", "&*ptr.wrapping_add(1).cast()") + bridge)

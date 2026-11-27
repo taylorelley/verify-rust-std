@@ -45,17 +45,33 @@ scope on these targets.
    Rustc checks the operand shape during code generation. The frontend
    rejects unresolved volatility. Check that the
    dispatch rejects every illegal ordering.
-3. **Source comparison.** Review how `check-generic-helpers.py` extracts
-   the helper bodies and specializes the access flag. The constructor suite
-   checks the cast in the Rust source before checking layout and compiler
-   output. Operation checks compare optimized LLVM dispatch, including the
-   function signature, resolved attributes, pointer and value operands,
-   orderings and panic branches. The 128-bit control changes the LLVM
-   receiver alignment from 16 to 32 bytes. The scripts can remove generated
-   names, metadata IDs and panic locations or follow LLVM aliases.
-   The comparisons apply to the pinned source, compiler and targets. The
-   Rust-level refinement argument still needs to account for conditions
-   that optimized LLVM may erase or assume.
+3. **Source comparison.** The required Part 1 constructors are the only
+   required Rust bodies proved with concrete replacements for their receiver
+   types. The source check matches the exact cast expression. Rustc
+   type-checks the original `UnsafeCell` field and associated storage choice
+   for each instantiation and checks size, alignment and offset on both
+   sides. The saved constructor MIR compares runtime and const-evaluation
+   paths, including the raw-pointer-to-reference operation and unwind edges.
+   For pointer constructors the check substitutes the sized `Pointee` for
+   `T` and runs for each of the five required layouts. The proof uses the
+   corresponding points-to predicates and preserves the allocation's
+   address, provenance and borrow lifetime. The positive checks run on the
+   same generated constructors whose bodies the verifier proves.
+
+   Part 2 verifies the named unsafe helpers extracted from the actual
+   `atomic.rs`. The ordinary load and store specialization substitutes
+   `false` for `VOLATILE` and checks that no use of the parameter remains.
+   Part 3 attaches trusted contracts to the compiler primitives these
+   helpers actually call. Review the primitive specifications and frontend
+   dispatch under item 2.
+
+   The separate public-wrapper matrix checks additional integration and
+   panic behavior. Optimized LLVM comparisons retain function signatures,
+   resolved function and call-site attributes, pointer and value operands,
+   orderings and panic branches. The AArch64 controls check both changing
+   the receiver alignment and adding `nounwind` to a panic call. General
+   Rust-level refinement of this additional matrix remains outside these
+   comparisons.
 4. **Scope of the claims.** The verified ordinary operations exclude the
    listed undefined behaviors under the trusted contracts and source
    correspondence argument. Native and Miri tests exercise functional

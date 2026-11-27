@@ -109,11 +109,13 @@ def main():
                                      case_logs / f"{label}-rustc.log")
                 if status:
                     raise SystemExit(output)
-                assembled = re.sub(r"!noalias !\d+", "!noalias !id", ir.read_text())
-                # Location records and attribute numbers depend on the crate.
-                # Retain the panic message allocation and all real instructions.
+                return dispatches(ir.read_text())
+
+            def dispatches(ir):
+                assembled = re.sub(r"!noalias !\d+", "!noalias !id", ir)
+                # Normalize the location operand and retain resolved call attributes.
                 return {
-                    op: re.sub(r"dereferenceable\(24\) @alloc_[0-9a-f]+\) #\d+", "dereferenceable(24) @location)",
+                    op: re.sub(r"dereferenceable\(24\) @alloc_[0-9a-f]+\)", "dereferenceable(24) @location)",
                                swap["canonical_dispatch"](assembled, f"sc_integer_{op}"))
                     for op in ORDERS
                 }
@@ -134,10 +136,16 @@ def main():
                     r"(?m)^(define .*@sc_integer_load\([^\n]*?%_0, ptr [^\n]*?nonnull align )16(\b)",
                     r"\g<1>32\2", bridge_ir,
                 )
-                normalize = swap["canonical_dispatch"]
-                if count != 1 or normalize(header_change, "sc_integer_load") == normalize(bridge_ir, "sc_integer_load"):
+                if count != 1 or dispatches(header_change)["load"] == expected["load"]:
                     raise SystemExit("Source comparison accepted stronger alignment on the load bridge")
                 (case_logs / "changed-header-alignment.ll").write_text(header_change)
+                call_change, count = re.subn(
+                    r"(?m)^(attributes #\d+ = \{ noreturn) \}$",
+                    r"\1 nounwind }", bridge_ir,
+                )
+                if count != 1 or dispatches(call_change)["load"] == expected["load"]:
+                    raise SystemExit("Source comparison accepted a changed panic call unwind contract")
+                (case_logs / "changed-panic-call-attributes.ll").write_text(call_change)
             proof.write_text(text + layout + bridge)
             if compile_dispatch(proof, "specialized") != expected:
                 raise SystemExit(f"Compiled load or store differs for {atomic_type}")

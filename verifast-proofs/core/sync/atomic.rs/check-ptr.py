@@ -13,6 +13,8 @@ import subprocess
 from string import Template
 import tempfile
 
+from constructor_mir import compare_constructor_mir, upstream_storage_check
+
 SIZES = (0, 1, 2, 3, 4)
 LAYOUT = """
 const _: () = {
@@ -132,13 +134,18 @@ def main():
                 "#[unsafe(no_mangle)]",
                 '#[stable(feature = "atomic_source_proof", since = "1.0.0")]\n#[unsafe(no_mangle)]',
             )
+            storage = upstream_storage_check(atomic.decode(), 8, "*mut Pointee", "AtomicPtr<Pointee>")
             (work / "atomic.rs").write_text(
                 normalized + f"\nstruct Pointee([u8; {size}]);\n"
-                + (layout + original_bridge).replace("$TYPE", "<Pointee>"),
+                + storage + (layout + original_bridge).replace("$TYPE", "<Pointee>"),
             )
             suffix = (layout + BRIDGE).replace("$TYPE", "")
             proof.write_text(generated + suffix)
             original = compile_dispatch(upstream, f"original-{size}")
+            case_logs = logs / f"constructor-{size}"
+            case_logs.mkdir(exist_ok=True)
+            compare_constructor_mir(rustc, flags, upstream, proof, case_logs,
+                                    "*mut Pointee", "AtomicPtr", pointer=True)
             if compile_dispatch(proof, f"specialized-{size}") != original:
                 raise SystemExit(f"Compiled pointer operations differ at pointee size {size}")
             for op, orders in (("load", ("monotonic", "acquire", "seq_cst")),

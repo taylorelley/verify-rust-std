@@ -120,9 +120,10 @@ def main():
                 compiled = ir.read_text()
                 # LLVM may merge identical always-panicking wrappers.
                 aliases = dict(re.findall(r"(?m)^@(sc_cas_\d+) = .*\balias [^\n]+, ptr @(sc_cas_\d+)$", compiled))
+                # Normalize the location operand without dropping call attributes.
                 compiled = re.sub(r"!noalias !\d+", "!noalias !id", compiled)
                 return {
-                    pair: re.sub(r"dereferenceable\(24\) @alloc_[0-9a-f]+\) #\d+", "dereferenceable(24) @location)",
+                    pair: re.sub(r"dereferenceable\(24\) @alloc_[0-9a-f]+\)", "dereferenceable(24) @location)",
                                  swap["canonical_dispatch"](compiled, aliases.get(key, key)))
                     for pair, key in keys.items()
                 }

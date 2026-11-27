@@ -10,10 +10,10 @@ for Linux x86-64, and for AArch64 Linux in the 128-bit cases.
 | Challenge 7 item | Proof step | Evidence |
 | --- | --- | --- |
 | Part 1: the 12 `from_ptr` constructors | `constructors` | Each constructor needs a live, initialized slot with the atomic alignment of its type, and holds it for the reference lifetime. All slot values are symbolic. `AtomicPtr` uses pointee sizes 0, 1, 2, 3 and 4 with an unrestricted pointer value. |
-| Part 2: the 15 unsafe helpers `atomic_store` to `atomic_umin` | `generic-helpers` | The helper bodies are extracted from the library at replay time. Load and store specialize the access flag to ordinary access. Each helper has a verified contract. |
+| Part 2: the named unsafe helpers (15 covered) `atomic_store` to `atomic_umin` | `generic-helpers` | The helper bodies are extracted from the library at replay time. Load and store specialize the access flag to ordinary access. Each helper has a verified contract. |
 | Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The public wrappers unwind on invalid orderings with every resource intact. |
 | Part 3: intrinsic contracts | `verifast-26.10-u8-store.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
-| Public methods and instantiations | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | The direct ordinary operation wrappers covered by the replay matrix, including integer widths and five pointer pointee sizes. The matrix records the supported methods. Callback-based updates and indirect convenience wrappers have no dedicated proof here. |
+| Additional public-wrapper evidence | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | The direct ordinary operation wrappers covered by the replay matrix, including integer widths and five pointer pointee sizes. The matrix records the supported methods. Callback-based updates and indirect convenience wrappers have no dedicated proof here. |
 
 The listed undefined behaviors are excluded as follows:
 
@@ -46,16 +46,19 @@ from the earlier VeriFast submission by jellllly420. [PR #675](https://github.co
    to VeriFast 26.10 and to the current master. Once a VeriFast release includes
    it, the repository's pinned release can replace it. See
    [`verifast-upstream.md`](verifast-upstream.md).
-3. The per-type wrapper proofs: a specialized copy of each covered public wrapper is
-   verified, then compared with the compiled library code by the replay
-   scripts. The LLVM comparison checks function signatures and resolved
-   attributes alongside dispatch. A source-level check separately compares
-   the constructor cast expressions before lowering. The LLVM comparison
-   is evidence about the generated code.
-   The proof still relies on review of Rust-level obligations erased or
-   assumed during lowering, including provenance, initialization and borrows.
-   The helper proof uses the extracted library text with the stated
-   ordinary-access specialization.
+3. The constructor proof replaces the associated storage projection with a
+   concrete wrapper. The replay checks the Rust cast, the actual associated
+   storage type, size, alignment and field offset. It compares both runtime
+   and const-evaluation MIR for each required constructor before LLVM
+   lowering, renaming only the corresponding types and discarding debug
+   bindings. The unsafe helper proofs use the library bodies directly,
+   specializing load and store to ordinary access.
+4. The additional public-wrapper proofs compare specialized code with the
+   compiled library, retaining signatures, function and call-site
+   attributes, and atomic instructions. They provide integration evidence
+   for the supported public methods. Those comparisons rely on the
+   documented source correspondence when interpreting Rust-level behaviors
+   such as provenance and borrows.
 
 [`review-guide.md`](review-guide.md) maps each claim to its evidence and lists
 the checks a reviewer should repeat.

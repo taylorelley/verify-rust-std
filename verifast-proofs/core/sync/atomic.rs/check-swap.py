@@ -13,7 +13,7 @@ from string import Template
 import subprocess
 import tempfile
 
-from llvm_dispatch import function_header
+from llvm_dispatch import function_header, resolve_attribute_groups
 
 FLAGS = ["--edition=2024", "--crate-type=lib"]
 ORDERS = {
@@ -49,7 +49,7 @@ def canonical_dispatch(ir, name="sc_verify_swap"):
     body = re.sub(r"%[\w.]+", lambda m: canonical.get(m[0], m[0]), body)
     body = re.sub(r"(?m)^([\w.]+):", lambda m: canonical["%" + m[1]][1:] + ":", body)
     header = function_header(ir, match[0].splitlines()[0], name)
-    return header + "\n" + re.sub(r" !prof !\d+", "", body)
+    return header + "\n" + resolve_attribute_groups(ir, re.sub(r" !prof !\d+", "", body))
 
 
 def main():

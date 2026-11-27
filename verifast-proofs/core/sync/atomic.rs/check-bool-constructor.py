@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tempfile
 
+from constructor_mir import constructor_mir, upstream_storage_check
+
 LAYOUT = """
 const _: () = {
     assert!(std::mem::size_of::<AtomicBool>() == 1);
@@ -42,27 +44,6 @@ def replace_once(text, old, new):
     return text.replace(old, new)
 
 
-def constructor_mir(path):
-    text = path.read_text()
-    pattern = r"(?m)^fn [^\n]*::from_ptr\(_1: \*mut bool\) -> &[^\n]+ \{\n(.*?)^\}"
-    bodies = re.findall(pattern, text, re.MULTILINE | re.DOTALL)
-    if len(bodies) != 2:
-        raise SystemExit(f"Expected runtime and const-evaluation MIR in {path.name}")
-
-    def without_debug(body):
-        # Only remove rustc's explicit debug scopes and variable names.
-        body = re.sub(r"(?m)^    scope \d+ \{\n        debug [^\n]+\n    \}\n", "", body)
-        body = re.sub(r"(?m)^ +debug [^\n]+\n", "", body)
-        return body.replace("atomic::Atomic<bool>", "AtomicBool")
-
-    return [without_debug(body) for body in bodies]
-
-
-def compare_mir(original, proof):
-    if constructor_mir(original) != constructor_mir(proof):
-        raise SystemExit("Specialized from_ptr differs in runtime or const-evaluation MIR")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verifast_bin", type=Path)
@@ -85,7 +66,7 @@ def main():
         for document in source.glob("atomic*.md"):
             shutil.copyfile(document, work / document.name)
         normalized = re.sub(r"(?m)^#\[rustc_diagnostic_item = ", "#[doc = ", atomic.decode())
-        (work / "atomic.rs").write_text(normalized + LAYOUT)
+        (work / "atomic.rs").write_text(normalized + LAYOUT + upstream_storage_check(atomic.decode(), 1, "u8", "AtomicBool"))
         original = work / "lib.rs"
         original.write_text(crate_header)
         proof_text = (here / "bool-constructor.rs").read_text()
@@ -99,7 +80,9 @@ def main():
                             "-Zmir-opt-level=2", crate, "-o", output], check=True,
                            capture_output=True, text=True)
             mir.append(output)
-        compare_mir(*mir)
+        expected = constructor_mir(mir[0], "bool", "atomic::Atomic<bool>", "AtomicBool")
+        if expected != constructor_mir(mir[1], "bool", "AtomicBool", "AtomicBool"):
+            raise SystemExit("Specialized from_ptr differs in runtime or const-evaluation MIR")
         # Confirm that a changed pointer computation cannot reuse the bridge.
         mutated = work / "mutated.rs"
         mutated.write_text(replace_once(proof_text, "&*ptr.cast()", "&*ptr.wrapping_add(1).cast()"))
@@ -107,7 +90,7 @@ def main():
         subprocess.run([rustc, "--edition=2024", "--crate-type=lib", "--emit=mir",
                         "-Zmir-opt-level=2", mutated, "-o", mutated_mir], check=True,
                        capture_output=True, text=True)
-        if constructor_mir(mir[0]) == constructor_mir(mutated_mir):
+        if expected == constructor_mir(mutated_mir, "bool", "AtomicBool", "AtomicBool"):
             raise SystemExit("Source comparison accepted a changed pointer computation")
         print("Original and specialized layouts and constructor MIR agree.")
 
