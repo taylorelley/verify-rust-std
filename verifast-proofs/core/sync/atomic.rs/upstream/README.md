@@ -17,4 +17,14 @@ and `NN-*.md` is its pull request description. Applying all five gives exactly
 
 Each stage builds on its own, and VeriFast's Rust test suite
 (`tests/rust/testsuite.mysh`, which includes the refinement-checker suite)
-passes at every stage on Linux x86-64 with `nightly-2026-09-25`.
+passes at every stage on Linux x86-64 with `nightly-2026-09-25`, on top of
+VeriFast master (`0a83dba`): 199, 201, 204, 205 and 210 commands, 0 failures.
+
+The same series is open as stacked pull requests in the fork
+[taylorelley/verifast](https://github.com/taylorelley/verifast), on branches
+`rust-atomic/01-*` to `rust-atomic/05-*`:
+[#2](https://github.com/taylorelley/verifast/pull/2),
+[#3](https://github.com/taylorelley/verifast/pull/3),
+[#4](https://github.com/taylorelley/verifast/pull/4),
+[#5](https://github.com/taylorelley/verifast/pull/5) and
+[#6](https://github.com/taylorelley/verifast/pull/6).

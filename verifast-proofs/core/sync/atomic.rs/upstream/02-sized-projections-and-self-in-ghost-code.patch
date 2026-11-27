@@ -259,24 +259,29 @@ index 4e237a6..ce44612 100644
          @ ghost_decls
          @ List.map
 diff --git a/src/verifast1.ml b/src/verifast1.ml
-index 18dda06..920e317 100644
+index 18dda06..b142ede 100644
 --- a/src/verifast1.ml
 +++ b/src/verifast1.ml
-@@ -2473,6 +2473,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+@@ -2473,6 +2473,18 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
      in
      iter [] structmap0 [] (List.rev structdeclmap)
  
 +  let sized_projection_typeids =
-+    ps |> flatmap @@ fun (PackageDecl (_, pn, _, ds)) ->
++    (ps |> flatmap @@ fun (PackageDecl (_, pn, _, ds)) ->
 +      ds |> flatmap @@ function
 +        Func (_, Fixpoint, _, _, g, [], _, _, _, _, None, _, _) ->
 +          [if pn = "" then g else pn ^ "::" ^ g]
-+      | _ -> []
++      | _ -> []) @
++    (* Typeid functions of associated types of traits in imported .rsspec files. A
++       .rsspec trait cannot declare a ?Sized associated type, so each one is Sized,
++       which holds for FnOnce::Output, Iterator::Item and AtomicPrimitive::AtomicInner. *)
++    (purefuncmap0 |> flatmap @@ fun (g, (_, _, _, params, _)) ->
++      if params = [] && String.ends_with ~suffix:"_typeid" g then [g] else [])
 +
    let struct_sizedness_map1 =
      let rec sizedness_of_type t: (bool, string) Either.t =
        match unfold_inferred_type t with
-@@ -2491,7 +2498,14 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+@@ -2491,7 +2503,14 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
        | BoundedGhostTypeParam (x, _) -> Right x
        | InferredType _ -> failwith "sizedness_of_type: called on unresolved inferred type"
        | ProjectionType (t, traitName, traitArgs, assocTypeName) ->
@@ -294,10 +299,10 @@ index 18dda06..920e317 100644
          Some (l, state_ref) -> finish_struct_sizedness_checking l sn state_ref
 diff --git a/tests/rust/assoc_type_projection.rs b/tests/rust/assoc_type_projection.rs
 new file mode 100644
-index 0000000..0d79f19
+index 0000000..303e5cd
 --- /dev/null
 +++ b/tests/rust/assoc_type_projection.rs
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,36 @@
 +// A struct whose field type is a projection of an associated type with an
 +// explicit or implicit Sized bound.
 +use std::cell::UnsafeCell;
@@ -322,6 +327,12 @@ index 0000000..0d79f19
 +#[repr(C)]
 +pub struct Cell2<T: ExplicitlySized> {
 +    v: T::Storage,
++}
++
++// A projection of an associated type of a trait declared in an .rsspec file.
++pub struct Peeked<I: Iterator> {
++    item: Option<I::Item>,
++    iter: I,
 +}
 +
 +pub fn smoke()
