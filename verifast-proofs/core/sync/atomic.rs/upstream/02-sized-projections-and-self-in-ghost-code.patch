@@ -134,10 +134,10 @@ index 515b952..0460fca 100644
                  let impl_clauses = tcx.clauses_of(impl_did).clauses;
                  body_cpn.fill_impl_block_clauses(impl_clauses, |clause_cpn, clause| {
 diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-index 4e237a6..ce44612 100644
+index 4e237a6..e569dc6 100644
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -484,9 +484,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -484,9 +484,64 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      let annot : Mir.annot = { span; raw } in
      Ok annot
  
@@ -145,15 +145,42 @@ index 4e237a6..ce44612 100644
 +     ghost code, applied to the impl's generic parameters. *)
 +  let self_type_alias : string option ref = ref None
 +
-+  (* Replaces each occurrence of the identifier Self in [raw] with [alias]. *)
++  (* Replaces each occurrence of the identifier Self in [raw] with [alias].
++     String literals, character literals and comments are copied unchanged. *)
 +  let replace_self_ident alias raw =
 +    let is_ident_char c =
 +      match c with 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false
 +    in
 +    let n = String.length raw in
 +    let buf = Buffer.create n in
-+    let rec iter i =
++    (* Copies raw.[i..j-1] and continues at j. *)
++    let rec copy_to i j = Buffer.add_string buf (String.sub raw i (j - i)); iter j
++    (* The index just past the closing quote of the literal opened at i. *)
++    and literal_end q i =
++      let rec go k =
++        if k >= n then n
++        else if raw.[k] = '\\' then go (k + 2)
++        else if raw.[k] = q then k + 1
++        else go (k + 1)
++      in
++      min n (go (i + 1))
++    and iter i =
 +      if i >= n then ()
++      else if raw.[i] = '"' then copy_to i (literal_end '"' i)
++      else if raw.[i] = '\'' && i + 2 < n && raw.[i + 1] <> '\\' && raw.[i + 2] = '\'' then
++        copy_to i (i + 3)
++      else if raw.[i] = '\'' && i + 1 < n && raw.[i + 1] = '\\' then copy_to i (literal_end '\'' i)
++      (* Ordinary comments; //@ and /*@ start annotations, which are code. *)
++      else if i + 1 < n && raw.[i] = '/' && raw.[i + 1] = '/' && (i + 2 >= n || raw.[i + 2] <> '@') then
++        copy_to i (match String.index_from_opt raw i '\n' with Some j -> j | None -> n)
++      else if i + 1 < n && raw.[i] = '/' && raw.[i + 1] = '*' && (i + 2 >= n || raw.[i + 2] <> '@') then begin
++        let rec close k =
++          if k + 1 >= n then n
++          else if raw.[k] = '*' && raw.[k + 1] = '/' then k + 2
++          else close (k + 1)
++        in
++        copy_to i (close (i + 2))
++      end
 +      else if i + 4 <= n && String.sub raw i 4 = "Self"
 +              && (i = 0 || not (is_ident_char raw.[i - 1]))
 +              && (i + 4 = n || not (is_ident_char raw.[i + 4])) then begin
@@ -176,7 +203,7 @@ index 4e237a6..ce44612 100644
  
    let translate_contract (contract_cpn : ContractRd.t) =
      let open ContractRd in
-@@ -4801,7 +4829,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -4801,7 +4856,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                      (TraitRd.RequiredFn.contract_get required_fn_cpn)))
        else required_fns
      in
@@ -209,7 +236,7 @@ index 4e237a6..ce44612 100644
  
    let decode_clause (clause_cpn : D.clause) =
      match clause_cpn with
-@@ -8109,12 +8161,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -8109,12 +8188,49 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
        let body_tr_defs_ctx =
          { adt_defs; directives = vf_mir_translator_directives; fn_specializer }
        in
@@ -226,7 +253,19 @@ index 4e237a6..ce44612 100644
 +          let* () =
 +            if BodyRd.is_inherent_impl_fn_get body_cpn then begin
 +              let* loc = translate_span_data (BodyRd.fn_sig_span_get body_cpn) in
-+              let* self_ty = translate_ty (BodyRd.inherent_impl_self_ty_get body_cpn) loc in
++              (* A self type that ghost code cannot name, for example one with
++                 lifetime arguments, gets no alias. Ghost code that uses Self
++                 there is then reported as using an unknown type. *)
++              let self_ty =
++                try
++                  match translate_ty (BodyRd.inherent_impl_self_ty_get body_cpn) loc with
++                  | Ok self_ty -> Some self_ty
++                  | Error _ -> None
++                with Ast.StaticError _ -> None
++              in
++              match self_ty with
++              | None -> self_type_alias := None; Ok ()
++              | Some self_ty ->
 +              let impl_params =
 +                BodyRd.impl_block_generics_get_list body_cpn
 +                |> List.map translate_generic_param_def |> List.map fst
@@ -249,7 +288,7 @@ index 4e237a6..ce44612 100644
        in
        Rocq_writer.rocq_print Args.rocq_writer ".\n";
        let body_sig_opts, body_decls, debug_infos =
-@@ -8138,7 +8215,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -8138,7 +8254,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
        let decls =
          List.map
            (modularize_decl module_imports_map)
@@ -341,10 +380,10 @@ index 0000000..303e5cd
 +{}
 diff --git a/tests/rust/self_in_ghost.rs b/tests/rust/self_in_ghost.rs
 new file mode 100644
-index 0000000..2c50299
+index 0000000..86c2157
 --- /dev/null
 +++ b/tests/rust/self_in_ghost.rs
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,73 @@
 +// Ghost code in an inherent impl can refer to the impl's self type as Self.
 +pub struct Wrap<T> {
 +    x: T,
@@ -391,6 +430,29 @@ index 0000000..2c50299
 +    //@ ens result == std::mem::size_of::<Self>(); //~should_fail
 +    {
 +        std::mem::size_of::<Wrap<u8>>()
++    }
++}
++
++// Self inside a string literal is not the self type.
++impl Wrap<u16> {
++    pub fn literal()
++    //@ req true;
++    //@ ens length("Self") == 4;
++    {
++    }
++}
++
++// An impl whose self type ghost code cannot name still verifies when the
++// annotations do not use Self.
++pub enum Borrowed<'a> {
++    Byte(&'a u8),
++}
++
++impl<'a> Borrowed<'a> {
++    pub fn unused_self()
++    //@ req true;
++    //@ ens true;
++    {
 +    }
 +}
 +

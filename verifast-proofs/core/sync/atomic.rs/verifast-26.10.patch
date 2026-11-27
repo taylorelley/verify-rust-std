@@ -478,7 +478,7 @@ index 9e81d09..6ae08be 100644
  
  struct TyAlias {
 diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
-index 9621ba9..d23d038 100644
+index 9621ba9..9ce9c4a 100644
 --- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
 +++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
 @@ -786,6 +786,36 @@ use rustc_span::RemapPathScopeComponents;
@@ -575,7 +575,7 @@ index 9621ba9..d23d038 100644
  
              // Encode directives
              vf_mir_cpn.fill_directives(&self.directives, |directive_cpn, directive| {
-@@ -1098,6 +1142,74 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1098,6 +1142,83 @@ use rustc_span::RemapPathScopeComponents;
              });
              adt_def_cpn.set_implements_drop(adt_def.has_dtor(tcx));
              adt_def_cpn.set_is_repr_c(adt_def.repr().c());
@@ -619,6 +619,12 @@ index 9621ba9..d23d038 100644
 +                }
 +                let sig = tcx.fn_sig(fn_did).instantiate_identity().skip_normalization().skip_binder();
 +                let env = ty::TypingEnv::post_analysis(tcx, fn_did);
++                // A projection bound such as T: Trait<Assoc = u8> can fix the layout of a
++                // field of type T::Assoc. A fact quantified over T would drop that bound, so
++                // such a function contributes only instances that mention no type parameters.
++                let has_projection_bounds = env.param_env.caller_bounds().any(|clause| {
++                    matches!(clause.kind().skip_binder(), ty::ClauseKind::Projection(_))
++                });
 +                for sig_ty in sig.inputs_and_output.iter() {
 +                    for arg in sig_ty.walk() {
 +                        let Some(ty) = arg.as_type() else { continue };
@@ -642,6 +648,9 @@ index 9621ba9..d23d038 100644
 +                                }
 +                            }
 +                        }
++                        if has_projection_bounds && !type_params.is_empty() {
++                            continue;
++                        }
 +                        instances.push((args, type_params, layout.align.abi.bytes()));
 +                    }
 +                }
@@ -650,7 +659,7 @@ index 9621ba9..d23d038 100644
          }
  
          fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
-@@ -1224,6 +1336,11 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1224,6 +1345,11 @@ use rustc_span::RemapPathScopeComponents;
                              Self::encode_typesystem_constant(enc_ctx.tcx, enc_ctx, &const_, term_cpn.init_const()),
                      }
                  }
@@ -662,7 +671,7 @@ index 9621ba9..d23d038 100644
                  _ => clause_cpn.set_ignored(()),
              }
          }
-@@ -1325,6 +1442,12 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1325,6 +1451,12 @@ use rustc_span::RemapPathScopeComponents;
                          Self::encode_generic_param_def(generic_param, generic_param_cpn);
                      },
                  );
@@ -675,7 +684,7 @@ index 9621ba9..d23d038 100644
  
                  let impl_clauses = tcx.clauses_of(impl_did).clauses;
                  body_cpn.fill_impl_block_clauses(impl_clauses, |clause_cpn, clause| {
-@@ -1826,9 +1949,27 @@ use rustc_span::RemapPathScopeComponents;
+@@ -1826,9 +1958,27 @@ use rustc_span::RemapPathScopeComponents;
                      Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
                  }
                  ty::TyKind::Foreign(_) => ty_kind_cpn.set_foreign(()),
@@ -720,10 +729,10 @@ index e0fcd7c..4c5ca4f 100644
      in_fn_body: bool,
      pub kind: GhostRangeKind,
 diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-index 4e237a6..3829a0e 100644
+index 4e237a6..3a61385 100644
 --- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
 +++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
-@@ -484,9 +484,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -484,9 +484,64 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      let annot : Mir.annot = { span; raw } in
      Ok annot
  
@@ -731,15 +740,42 @@ index 4e237a6..3829a0e 100644
 +     ghost code, applied to the impl's generic parameters. *)
 +  let self_type_alias : string option ref = ref None
 +
-+  (* Replaces each occurrence of the identifier Self in [raw] with [alias]. *)
++  (* Replaces each occurrence of the identifier Self in [raw] with [alias].
++     String literals, character literals and comments are copied unchanged. *)
 +  let replace_self_ident alias raw =
 +    let is_ident_char c =
 +      match c with 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false
 +    in
 +    let n = String.length raw in
 +    let buf = Buffer.create n in
-+    let rec iter i =
++    (* Copies raw.[i..j-1] and continues at j. *)
++    let rec copy_to i j = Buffer.add_string buf (String.sub raw i (j - i)); iter j
++    (* The index just past the closing quote of the literal opened at i. *)
++    and literal_end q i =
++      let rec go k =
++        if k >= n then n
++        else if raw.[k] = '\\' then go (k + 2)
++        else if raw.[k] = q then k + 1
++        else go (k + 1)
++      in
++      min n (go (i + 1))
++    and iter i =
 +      if i >= n then ()
++      else if raw.[i] = '"' then copy_to i (literal_end '"' i)
++      else if raw.[i] = '\'' && i + 2 < n && raw.[i + 1] <> '\\' && raw.[i + 2] = '\'' then
++        copy_to i (i + 3)
++      else if raw.[i] = '\'' && i + 1 < n && raw.[i + 1] = '\\' then copy_to i (literal_end '\'' i)
++      (* Ordinary comments; //@ and /*@ start annotations, which are code. *)
++      else if i + 1 < n && raw.[i] = '/' && raw.[i + 1] = '/' && (i + 2 >= n || raw.[i + 2] <> '@') then
++        copy_to i (match String.index_from_opt raw i '\n' with Some j -> j | None -> n)
++      else if i + 1 < n && raw.[i] = '/' && raw.[i + 1] = '*' && (i + 2 >= n || raw.[i + 2] <> '@') then begin
++        let rec close k =
++          if k + 1 >= n then n
++          else if raw.[k] = '*' && raw.[k + 1] = '/' then k + 2
++          else close (k + 1)
++        in
++        copy_to i (close (i + 2))
++      end
 +      else if i + 4 <= n && String.sub raw i 4 = "Self"
 +              && (i = 0 || not (is_ident_char raw.[i - 1]))
 +              && (i + 4 = n || not (is_ident_char raw.[i + 4])) then begin
@@ -762,7 +798,7 @@ index 4e237a6..3829a0e 100644
  
    let translate_contract (contract_cpn : ContractRd.t) =
      let open ContractRd in
-@@ -1456,6 +1484,159 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -1456,6 +1511,159 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
          "std::mem::ManuallyDrop::deref_mut"
      | _ -> name
  
@@ -922,7 +958,7 @@ index 4e237a6..3829a0e 100644
    and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
        =
      let id_cpn = fn_def_ty_cpn.id in
-@@ -1929,6 +2110,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -1929,6 +2137,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
    type body_tr_defs_ctx = {
      adt_defs : Mir.adt_def_tr list;
      directives : Mir.annot list;
@@ -930,7 +966,7 @@ index 4e237a6..3829a0e 100644
      fn_specializer : string -> D.generic_arg list -> string * D.generic_arg list;
    }
  
-@@ -2386,17 +2568,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -2386,17 +2595,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
        | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
            translate_regular_fn_call [] fn_name
        | `TrTypedConstantFn fn_def_ty_cpn -> (
@@ -958,7 +994,7 @@ index 4e237a6..3829a0e 100644
            in
            let* substs =
              ListAux.try_map
-@@ -4801,7 +4983,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -4801,7 +5010,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                      (TraitRd.RequiredFn.contract_get required_fn_cpn)))
        else required_fns
      in
@@ -991,7 +1027,7 @@ index 4e237a6..3829a0e 100644
  
    let decode_clause (clause_cpn : D.clause) =
      match clause_cpn with
-@@ -6267,6 +6473,28 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -6267,6 +6500,28 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
              let [ variant_def_no_zst ] = variants_no_zst in
              let fds_no_zst = variant_def_no_zst.fields in
              let field_defs_no_zst = List.map translate_to_vf_field_def fds_no_zst in
@@ -1020,7 +1056,7 @@ index 4e237a6..3829a0e 100644
              let struct_decl =
                Ast.Struct
                  ( def_loc,
-@@ -6278,7 +6506,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -6278,7 +6533,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
                        (*instance_pred_decl list*) [],
                        (*is polymorphic*) false ),
                    (*struct_attr list*)
@@ -1039,7 +1075,7 @@ index 4e237a6..3829a0e 100644
              in
              let struct_typedef_aux =
                Ast.TypedefDecl
-@@ -7636,8 +7874,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -7636,8 +7901,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
      | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
      | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
          if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
@@ -1050,7 +1086,7 @@ index 4e237a6..3829a0e 100644
          if mut1 = mut2 then match_types env ty1 ty2 else None
      | _ -> None
  
-@@ -8106,15 +8344,47 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -8106,15 +8371,59 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
              bodies_cpn
          else bodies_cpn
        in
@@ -1078,7 +1114,19 @@ index 4e237a6..3829a0e 100644
 +          let* () =
 +            if BodyRd.is_inherent_impl_fn_get body_cpn then begin
 +              let* loc = translate_span_data (BodyRd.fn_sig_span_get body_cpn) in
-+              let* self_ty = translate_ty (BodyRd.inherent_impl_self_ty_get body_cpn) loc in
++              (* A self type that ghost code cannot name, for example one with
++                 lifetime arguments, gets no alias. Ghost code that uses Self
++                 there is then reported as using an unknown type. *)
++              let self_ty =
++                try
++                  match translate_ty (BodyRd.inherent_impl_self_ty_get body_cpn) loc with
++                  | Ok self_ty -> Some self_ty
++                  | Error _ -> None
++                with Ast.StaticError _ -> None
++              in
++              match self_ty with
++              | None -> self_type_alias := None; Ok ()
++              | Some self_ty ->
 +              let impl_params =
 +                BodyRd.impl_block_generics_get_list body_cpn
 +                |> List.map translate_generic_param_def |> List.map fst
@@ -1101,7 +1149,7 @@ index 4e237a6..3829a0e 100644
        in
        Rocq_writer.rocq_print Args.rocq_writer ".\n";
        let body_sig_opts, body_decls, debug_infos =
-@@ -8138,7 +8408,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+@@ -8138,7 +8447,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
        let decls =
          List.map
            (modularize_decl module_imports_map)
@@ -1296,10 +1344,10 @@ index 0000000..303e5cd
 +{}
 diff --git a/tests/rust/instance_alignment.rs b/tests/rust/instance_alignment.rs
 new file mode 100644
-index 0000000..128e428
+index 0000000..66231c9
 --- /dev/null
 +++ b/tests/rust/instance_alignment.rs
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,59 @@
 +// Rustc's alignment for instances of a generic struct that appear in local
 +// function signatures.
 +#[repr(C, align(2))]
@@ -1331,6 +1379,31 @@ index 0000000..128e428
 +//@ ens true;
 +{
 +    //@ assert std::mem::align_of::<Wrap<u16> >() == 2; //~should_fail
++}
++
++// A bound on an associated type can fix the layout of an instance in one
++// function. The fact must not be generalized to every type argument.
++pub trait Primitive {
++    type Storage;
++}
++
++#[repr(C)]
++pub struct Cell<T: Primitive> {
++    v: T::Storage,
++}
++
++pub fn narrowed<T: Primitive<Storage = u8>>(_p: *mut Cell<T>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Cell<T> >() == 1; //~should_fail
++}
++
++pub fn widened<T: Primitive<Storage = u64>>(_p: *mut Cell<T>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Cell<T> >() == 8; //~should_fail
 +}
 +
 +fn main() {}
@@ -1727,10 +1800,10 @@ index ec62e86..8e40afe 100644
    refinement-checker loop_orig.rs loop_verified.rs
 diff --git a/tests/rust/self_in_ghost.rs b/tests/rust/self_in_ghost.rs
 new file mode 100644
-index 0000000..2c50299
+index 0000000..86c2157
 --- /dev/null
 +++ b/tests/rust/self_in_ghost.rs
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,73 @@
 +// Ghost code in an inherent impl can refer to the impl's self type as Self.
 +pub struct Wrap<T> {
 +    x: T,
@@ -1777,6 +1850,29 @@ index 0000000..2c50299
 +    //@ ens result == std::mem::size_of::<Self>(); //~should_fail
 +    {
 +        std::mem::size_of::<Wrap<u8>>()
++    }
++}
++
++// Self inside a string literal is not the self type.
++impl Wrap<u16> {
++    pub fn literal()
++    //@ req true;
++    //@ ens length("Self") == 4;
++    {
++    }
++}
++
++// An impl whose self type ghost code cannot name still verifies when the
++// annotations do not use Self.
++pub enum Borrowed<'a> {
++    Byte(&'a u8),
++}
++
++impl<'a> Borrowed<'a> {
++    pub fn unused_self()
++    //@ req true;
++    //@ ens true;
++    {
 +    }
 +}
 +
