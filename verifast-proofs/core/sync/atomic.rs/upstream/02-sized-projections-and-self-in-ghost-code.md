@@ -16,8 +16,16 @@ verified.
   already does for `type Assoc;` in `.rsspec` traits.
 * `sizedness_of_type` treats a projection as sized exactly when that typeid is
   declared. `?Sized` associated types are still rejected (fail-closed).
+* Associated types of traits in imported `.rsspec` files, such as
+  `<I as Iterator>::Item`, are also sized. A `.rsspec` trait cannot declare a
+  `?Sized` associated type, so each one denotes a `Sized` type. This holds for
+  the three that exist today: `FnOnce::Output`, `Iterator::Item` and
+  `AtomicPrimitive::AtomicInner`. Adding a `.rsspec` trait whose Rust
+  associated type is `?Sized`, such as `Deref::Target`, would need a way to say
+  so first.
 
-**Test.** `tests/rust/assoc_type_projection.rs` (implicit and explicit `Sized`).
+**Test.** `tests/rust/assoc_type_projection.rs` covers implicit and explicit
+`Sized` bounds, and a projection of `Iterator::Item`.
 
 ## `Self` in ghost code of inherent impls
 

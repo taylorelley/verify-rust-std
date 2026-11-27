@@ -15,3 +15,5 @@ The refinement checker fails on two features of current standard-library code:
 
 **Test.** `tests/rust/refinement_checker/const_args_*.rs`: identical code must
 refine, and a changed ordering (`Relaxed` to `SeqCst`) must not.
+`const_param_type_*.rs`: two functions that differ only in the type of a const
+parameter must not refine each other.

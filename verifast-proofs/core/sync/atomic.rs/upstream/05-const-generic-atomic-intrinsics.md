@@ -47,9 +47,18 @@ existing `atomic_store_*` specifications:
 
 These are trusted specifications and deserve the closest review.
 
-**Tests.** `tests/rust/purely_unsafe/atomic_intrinsics.rs` covers concrete and
-generic loads, stores and exchanges. It checks that a small Relaxed load works
-with a read fraction, and that these fail with one: a store, an Acquire load, a
-128-bit Relaxed load, and a load whose volatility is a parameter.
-`atomic_intrinsics_bad_ordering.rs` (a Release load) and
-`atomic_intrinsics_wide_ptr.rs` (a `?Sized` pointee) must be rejected.
+**Tests.** `tests/rust/purely_unsafe/atomic_intrinsics.rs` covers:
+* concrete and generic loads, stores and exchanges;
+* both compare-exchange forms;
+* integer and pointer arithmetic;
+* signed and unsigned min and max;
+* the byte AND, OR and XOR with a 0-or-1 slot, and NAND, which needs an
+  unrestricted slot.
+
+It checks that a small Relaxed load works with a read fraction. It also checks
+that these fail with one: a store, an Acquire load, a 128-bit Relaxed load, and
+a load whose volatility is a parameter. These must be rejected:
+* `atomic_intrinsics_bad_ordering.rs`, a Release load;
+* `atomic_intrinsics_wide_ptr.rs`, a `?Sized` pointee;
+* `atomic_intrinsics_mismatched_operands.rs`, a `u32` delta on a `u16` slot;
+* `atomic_intrinsics_extrema_signedness.rs`, signed max on `u8`.
