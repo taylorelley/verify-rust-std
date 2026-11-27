@@ -112,6 +112,13 @@ scope on these targets.
    The atomic model treats stored pointer values as opaque and abstracts
    from synchronization behavior.
 
+VeriFast 26.10 documents incomplete checking of mutable-reference and box
+aliasing and of references passed across calls. The required constructors
+form a shared reference from a raw pointer. Their contracts require live,
+aligned storage or an existing share and keep it borrowed for the reference
+lifetime. The replay also runs concrete clients under Miri with Tree Borrows
+on both targets. Those runs cover the executions in the logs. [VeriFast 26.10 Rust soundness notes](https://github.com/verifast/verifast/blob/f76012fb518703b1d98e243ac4f487f16877cfcb/tests/rust/README.md)
+
 ## Decisions for the committee
 
 The submission relies on the patched VeriFast frontend and primitive
