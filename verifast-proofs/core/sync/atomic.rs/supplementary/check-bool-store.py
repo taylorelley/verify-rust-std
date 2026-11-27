@@ -91,7 +91,7 @@ def main():
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
     constructor = runpy.run_path(str(here / "check-bool-constructor.py"))
-    source_root = here.parents[3] / "library/core/src"
+    source_root = here.parents[4] / "library/core/src"
     atomic = (source_root / "sync/atomic.rs").read_bytes()
     # The compiled comparisons below link the proof to this source.
     print("atomic.rs sha256:", hashlib.sha256(atomic).hexdigest(), flush=True)

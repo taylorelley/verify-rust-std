@@ -38,7 +38,7 @@ def main():
     parser.add_argument("logs", type=Path)
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
-    source = here.parents[3] / "library/core/src"
+    source = here.parents[4] / "library/core/src"
     constructor = runpy.run_path(str(here / "check-bool-constructor.py"))
     matrix = runpy.run_path(str(here / "check-from-ptr.py"))
     swap = runpy.run_path(str(here / "check-swap.py"))

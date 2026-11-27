@@ -51,7 +51,7 @@ def main():
     parser.add_argument("logs", type=Path)
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
-    source = here.parents[3] / "library/core/src/sync"
+    source = here.parents[4] / "library/core/src/sync"
     atomic = (source / "atomic.rs").read_bytes()
     # The compiled comparisons below link the proof to this source.
     print("atomic.rs sha256:", hashlib.sha256(atomic).hexdigest(), flush=True)

@@ -100,7 +100,7 @@ def main():
     parser.add_argument("z3_library", type=Path)
     parser.add_argument("logs", type=Path)
     args = parser.parse_args()
-    source = Path(__file__).resolve().parents[4] / "library/std/src/thread"
+    source = Path(__file__).resolve().parents[5] / "library/std/src/thread"
     for name, expected in SOURCE_DIGESTS.items():
         if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
             raise SystemExit(f"Review scope counter abstraction against changed {name}")

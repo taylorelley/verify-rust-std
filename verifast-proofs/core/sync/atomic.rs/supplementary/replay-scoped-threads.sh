@@ -14,7 +14,7 @@ fi
 
 logs="$work/scoped-thread-evidence"
 mkdir -p -- "$logs"
-source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$proof_dir/../../../../rust-toolchain.toml")
+source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$proof_dir/../../../../../rust-toolchain.toml")
 [[ -n $source_nightly ]] || { echo "No channel in rust-toolchain.toml" >&2; exit 1; }
 rustc_path=$(rustup which --toolchain "$source_nightly" rustc)
 export LD_LIBRARY_PATH="$runtime:$deps${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

@@ -155,7 +155,7 @@ def main():
     parser.add_argument("logs", type=Path)
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
-    source = (here.parents[3] / "library/core/src/sync/atomic.rs").read_text()
+    source = (here.parents[4] / "library/core/src/sync/atomic.rs").read_text()
     logs = args.logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)
     flags = "--edition=2024 --crate-type=lib"
@@ -208,7 +208,7 @@ def main():
         if result.returncode == 0 or "error[E0511]: invalid monomorphization" not in result.stderr:
             raise SystemExit(f"Rustc did not reject the expected operand shape in {probe.name}")
     expect_pass("generic-helpers", proof)
-    challenge = here.parents[3] / "doc/src/challenges/0007-atomic-types.md"
+    challenge = here.parents[4] / "doc/src/challenges/0007-atomic-types.md"
     required, intrinsic_calls = challenge_coverage(
         challenge.read_text(), logs / "generic-helpers.rs", (logs / "generic-helpers.log").read_text(),
     )
@@ -269,11 +269,14 @@ def main():
          mutate("atomic_compare_exchange", (CONTRACTS["atomic_compare_exchange"][0],
                                             CONTRACTS["atomic_compare_exchange"][1], "false")),
          "Cannot prove condition. (Cannot prove false.)"),
-        ("generic-volatile-load",
-         mutate("atomic_load", body=(
-             "const unsafe fn atomic_load<T: Copy>",
-             "const unsafe fn atomic_load<T: Copy, const VOLATILE: bool>"), volatile=True),
-         "only ordinary accesses (VOLATILE=false) are modeled"),
+        # A load whose volatility is a parameter gets the writable-storage contract,
+        # so it cannot run on a read-only share.
+        ("generic-volatile-load-read-fraction",
+         mutate("atomic_load", tuple(clause.replace("dst, 1,", "dst, 1/2,")
+                                     for clause in CONTRACTS["atomic_load"]),
+                body=("const unsafe fn atomic_load<T: Copy>",
+                      "const unsafe fn atomic_load<T: Copy, const VOLATILE: bool>"), volatile=True),
+         "No matching heap chunks: [_]std::intrinsics::atomic_points_to<T>(dst, 1, _)"),
         ("release-load-intrinsic",
          mutate("atomic_load", body=("Acquire => intrinsics::atomic_load::<T, { AO::Acquire }, false>(dst)",
                                      "Acquire => intrinsics::atomic_load::<T, { AO::Release }, false>(dst)")),
