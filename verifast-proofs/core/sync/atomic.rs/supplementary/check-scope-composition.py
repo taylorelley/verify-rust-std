@@ -133,7 +133,7 @@ def main():
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
     counter = runpy.run_path(str(here / "check-scope-counter.py"))
-    rust_library = here.parents[3] / "library"
+    rust_library = here.parents[4] / "library"
     digests = {f"std/src/thread/{name}": digest for name, digest in counter["SOURCE_DIGESTS"].items()}
     digests["alloc/src/rcs/arc.rs"] = ARC_DIGEST
     for name, expected in digests.items():

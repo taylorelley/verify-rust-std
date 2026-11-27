@@ -25,7 +25,7 @@ def main():
     args = parser.parse_args()
     rustc = args.rustc.resolve()
     here = Path(__file__).resolve().parent
-    repository = here.parents[3]
+    repository = here.parents[4]
     fork = repository / "library/core/src"
     subprocess.run([rustc, "-vV"], check=True)
     sysroot = Path(subprocess.check_output([rustc, "--print", "sysroot"], text=True).strip())

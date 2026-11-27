@@ -48,7 +48,7 @@ def main():
     boolean = runpy.run_path(str(here / "check-bool-store.py"))
     normalize = boolean["normalize_dispatch"]
     replace = constructor["replace_once"]
-    src = here.parents[3] / "library/core/src"
+    src = here.parents[4] / "library/core/src"
     atomic = (src / "sync/atomic.rs").read_bytes()
     # The compiled comparisons below link the proof to this source.
     print("atomic.rs sha256:", hashlib.sha256(atomic).hexdigest(), flush=True)

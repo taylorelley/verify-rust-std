@@ -36,7 +36,7 @@ def main():
     parser.add_argument("logs", type=Path)
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
-    source = here.parents[3] / "library/core/src/sync"
+    source = here.parents[4] / "library/core/src/sync"
     runtime = args.verifast_bin.resolve()
     logs = args.logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)

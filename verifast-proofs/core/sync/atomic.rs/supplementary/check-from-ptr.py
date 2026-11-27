@@ -69,7 +69,7 @@ def main():
     helpers = runpy.run_path(str(here / "check-bool-constructor.py"))
     runner = runpy.run_path(str(here / "check-bool-store.py"))
     replace = helpers["replace_once"]
-    source_dir = here.parents[3] / "library/core/src/sync"
+    source_dir = here.parents[4] / "library/core/src/sync"
     atomic = (source_dir / "atomic.rs").read_bytes()
     # The compiled comparisons below link the proof to this source.
     print("atomic.rs sha256:", hashlib.sha256(atomic).hexdigest(), flush=True)
@@ -179,7 +179,7 @@ def main():
     if pointer["target"] != HOST or sorted(pointer["pointee_sizes"]) != [0, 1, 2, 3, 4]:
         raise SystemExit("Incomplete pointer constructor coverage")
     coverage["AtomicPtr"] = {"bytes": 8, "required": True, **pointer}
-    challenge = here.parents[3] / "doc/src/challenges/0007-atomic-types.md"
+    challenge = here.parents[4] / "doc/src/challenges/0007-atomic-types.md"
     required = set(re.findall(r"^- `(Atomic\w+)::from_ptr`$", challenge.read_text(), re.M))
     if required != {name for name, case in coverage.items() if case["required"]}:
         raise SystemExit("Replay coverage differs from the Challenge 7 constructor list")

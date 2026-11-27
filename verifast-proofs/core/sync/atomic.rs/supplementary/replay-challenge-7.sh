@@ -9,7 +9,7 @@ mkdir -- "$work"
 logs="$work/evidence"
 mkdir -- "$logs"
 # The source nightly follows the fork's toolchain file so subtree updates need no edit here.
-source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$proof_dir/../../../../rust-toolchain.toml")
+source_nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$proof_dir/../../../../../rust-toolchain.toml")
 [[ -n $source_nightly ]] || { echo "No channel in rust-toolchain.toml" >&2; exit 1; }
 verifier_nightly=nightly-2026-09-25
 cross_target=aarch64-unknown-linux-gnu
@@ -26,15 +26,15 @@ rustc_path=$(rustup which --toolchain "$source_nightly" rustc)
 {
     "$rustc_path" -vV
     rustc "+$verifier_nightly" -vV
-    repo=$(cd "$proof_dir/../../../.." && pwd)
+    repo=$(cd "$proof_dir/../../../../.." && pwd)
     if git -C "$repo" rev-parse --verify HEAD >/dev/null 2>&1; then
         git -C "$repo" log -1 --format='Checkout %H'
     fi
     (cd "$repo" && sha256sum library/core/src/sync/atomic.rs library/core/src/intrinsics/mod.rs \
-        verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch)
+        verifast-proofs/core/sync/atomic.rs/verifast-26.10.patch)
 } > "$logs/toolchains-and-patch.txt"
 
-run build bash "$proof_dir/build-store-verifast.sh" "$work/verifast" "$@"
+run build bash "$proof_dir/../build-verifast.sh" "$work/verifast" "$@"
 runtime="$work/verifast/verifast-26.10/bin"
 cp -- "$runtime/rust/std/lib.rsspec" "$logs/lib.rsspec"
 export LD_LIBRARY_PATH="$runtime:$work/verifast/vfdeps-adf88dc/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

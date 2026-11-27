@@ -54,7 +54,7 @@ def main():
     constructor = runpy.run_path(str(here / "check-bool-constructor.py"))
     checks = runpy.run_path(str(here / "check-bool-store.py"))
     replace = constructor["replace_once"]
-    src = here.parents[3] / "library/core/src/sync"
+    src = here.parents[4] / "library/core/src/sync"
     atomic = (src / "atomic.rs").read_bytes()
     # The compiled comparisons below link the proof to this source.
     print("atomic.rs sha256:", hashlib.sha256(atomic).hexdigest(), flush=True)

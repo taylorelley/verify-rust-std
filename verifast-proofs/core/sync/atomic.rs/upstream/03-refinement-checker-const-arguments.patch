@@ -1,0 +1,159 @@
+diff --git a/src/refinement_checker/refinement_checker.ml b/src/refinement_checker/refinement_checker.ml
+index ecbe8e3..b2a5588 100644
+--- a/src/refinement_checker/refinement_checker.ml
++++ b/src/refinement_checker/refinement_checker.ml
+@@ -105,6 +105,7 @@ type literal_const_expr =
+ and const_expr =
+   ParamConstExpr of string
+ | LiteralConstExpr of literal_const_expr
++| BranchConstExpr of ty * const_expr list (* An ADT, tuple or array value, such as an enum variant *)
+ and ty =
+   Bool
+ | Int of int_width
+@@ -145,9 +146,10 @@ let string_of_literal_const_expr = function
+ | USizeValue (size, i) -> Printf.sprintf "USizeValue %d %s" size (Stdint.Uint64.to_string i)
+ | CharValue i -> Printf.sprintf "CharValue %s" (Stdint.Uint32.to_string i)
+ 
+-let string_of_const_expr = function
++let rec string_of_const_expr = function
+   ParamConstExpr param -> Printf.sprintf "ParamConstExpr %s" param
+ | LiteralConstExpr literal -> string_of_literal_const_expr literal
++| BranchConstExpr (_, elems) -> Printf.sprintf "BranchConstExpr [%s]" (String.concat "; " (List.map string_of_const_expr elems))
+ 
+ let rec string_of_ty = function
+   Bool -> "Bool"
+@@ -297,7 +299,7 @@ and decode_const_expr genv const_cpn =
+     let valtree = value_cpn.val_tree in
+     match valtree with
+       Leaf scalar_int_cpn -> LiteralConstExpr (decode_scalar_int ty scalar_int_cpn)
+-    | Branch _ -> failwith "Branch not supported"
++    | Branch elems -> BranchConstExpr (ty, List.map (decode_const_expr genv) elems)
+ 
+ type call_path = basic_block_path option
+ and basic_block_path = {bb_caller: basic_block_path option; bb_index: int}
+@@ -2269,6 +2271,13 @@ let check_clause_refines_clause genv0 clause0 genv1 clause1 =
+       let generic_args0 = trait_clause0.args in
+       let generic_args1 = trait_clause1.args in
+       if List.map (decode_gen_arg genv0) generic_args0 <> List.map (decode_gen_arg genv1) generic_args1 then failwith "The two trait clauses have different generic arguments"
++  | ConstArgHasType const_arg0, ConstArgHasType const_arg1 ->
++      let arg0 = decode_gen_arg genv0 {kind = Const const_arg0.const} in
++      let arg1 = decode_gen_arg genv1 {kind = Const const_arg1.const} in
++      if arg0 <> arg1 then failwith "The two const argument type clauses have different constants";
++      let ty0 = decode_gen_arg genv0 {kind = Type const_arg0.ty} in
++      let ty1 = decode_gen_arg genv1 {kind = Type const_arg1.ty} in
++      if ty0 <> ty1 then failwith "The two const argument type clauses have different types"
+   | Projection projection_clause0, Projection projection_clause1 ->
+       let proj_term0 = projection_clause0.projection_term in
+       let proj_term1 = projection_clause1.projection_term in
+@@ -2347,6 +2356,10 @@ let check_body_refines_body bodies0 bodies1 def_path body0 body1 =
+   let projection_clauses1, clauses1 = List.partition (function Projection _ -> true | _ -> false) clauses1 in
+   if List.length projection_clauses0 <> List.length projection_clauses1 then failwith "The two functions have a different number of projection clauses";
+   List.iter2 (fun clause0 clause1 -> check_clause_refines_clause root_genv0 clause0 root_genv1 clause1) projection_clauses0 projection_clauses1;
++  let const_arg_clauses0, clauses0 = List.partition (function ConstArgHasType _ -> true | _ -> false) clauses0 in
++  let const_arg_clauses1, clauses1 = List.partition (function ConstArgHasType _ -> true | _ -> false) clauses1 in
++  if List.length const_arg_clauses0 <> List.length const_arg_clauses1 then failwith "The two functions have a different number of const argument type clauses";
++  List.iter2 (fun clause0 clause1 -> check_clause_refines_clause root_genv0 clause0 root_genv1 clause1) const_arg_clauses0 const_arg_clauses1;
+   if clauses0 <> [] || clauses1 <> [] then failwith "Clause kind not supported";
+   let inputs0 = body0.inputs in
+   let inputs1 = body1.inputs in
+diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
+index 460b952..1ef7733 100644
+--- a/src/rust_frontend/vf_mir/vf_mir.capnp
++++ b/src/rust_frontend/vf_mir/vf_mir.capnp
+@@ -418,11 +418,16 @@ struct Clause {
+         projectionTerm @0: AliasTerm;
+         term @1: Term; # G
+     }
++    struct ConstArgHasType { # const parameter C has type T
++        const @0: TyConst;
++        ty @1: Ty;
++    }
+     union {
+         outlives @0: Outlives;
+         trait @2: Trait;
+         projection @3: Projection;
+         ignored @1: Void; # A clause that we are ignoring for now
++        constArgHasType @4: ConstArgHasType;
+     }
+ }
+ 
+diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+index 0460fca..fa944cc 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+@@ -1268,6 +1268,11 @@ use rustc_span::RemapPathScopeComponents;
+                             Self::encode_typesystem_constant(enc_ctx.tcx, enc_ctx, &const_, term_cpn.init_const()),
+                     }
+                 }
++                ty::ClauseKind::ConstArgHasType(const_, ty) => {
++                    let mut const_arg_cpn = clause_cpn.init_const_arg_has_type();
++                    Self::encode_typesystem_constant(enc_ctx.tcx, enc_ctx, &const_, const_arg_cpn.reborrow().init_const());
++                    Self::encode_ty(enc_ctx.tcx, enc_ctx, ty, const_arg_cpn.init_ty());
++                }
+                 _ => clause_cpn.set_ignored(()),
+             }
+         }
+diff --git a/tests/rust/refinement_checker/const_args_orig.rs b/tests/rust/refinement_checker/const_args_orig.rs
+new file mode 100644
+index 0000000..7f99003
+--- /dev/null
++++ b/tests/rust/refinement_checker/const_args_orig.rs
+@@ -0,0 +1,9 @@
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++pub unsafe fn load<T: Copy, const VOLATILE: bool>(p: *const T) -> T {
++    unsafe { intrinsics::atomic_load::<T, { AO::Acquire }, VOLATILE>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/const_args_verified.rs b/tests/rust/refinement_checker/const_args_verified.rs
+new file mode 100644
+index 0000000..bcaddc3
+--- /dev/null
++++ b/tests/rust/refinement_checker/const_args_verified.rs
+@@ -0,0 +1,12 @@
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++pub unsafe fn load<T: Copy, const VOLATILE: bool>(p: *const T) -> T
++//@ req true;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<T, { AO::Acquire }, VOLATILE>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/const_args_verified_bad.rs b/tests/rust/refinement_checker/const_args_verified_bad.rs
+new file mode 100644
+index 0000000..b47feb3
+--- /dev/null
++++ b/tests/rust/refinement_checker/const_args_verified_bad.rs
+@@ -0,0 +1,12 @@
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++pub unsafe fn load<T: Copy, const VOLATILE: bool>(p: *const T) -> T
++//@ req true;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<T, { AO::SeqCst }, VOLATILE>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/refinement_checker/testsuite.mysh b/tests/rust/refinement_checker/testsuite.mysh
+index ec62e86..2dd73ad 100644
+--- a/tests/rust/refinement_checker/testsuite.mysh
++++ b/tests/rust/refinement_checker/testsuite.mysh
+@@ -1,6 +1,8 @@
+ begin_parallel
+   !refinement-checker missing_func_orig.rs missing_func_verified.rs
+   refinement-checker basic_orig.rs basic_verified.rs
++  refinement-checker const_args_orig.rs const_args_verified.rs
++  !refinement-checker const_args_orig.rs const_args_verified_bad.rs
+   !refinement-checker basic_orig.rs basic_verified_bad1.rs
+   !refinement-checker basic_orig.rs basic_verified_bad2.rs
+   refinement-checker loop_orig.rs loop_verified.rs
