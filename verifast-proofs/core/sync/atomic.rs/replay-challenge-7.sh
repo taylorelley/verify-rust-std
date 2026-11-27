@@ -51,11 +51,6 @@ prove compare-exchange check-compare-exchange
 prove arithmetic check-arithmetic
 prove bitwise check-arithmetic --bitwise
 prove extrema check-arithmetic --extrema
-prove scoped-thread-boundary check-scope-boundary
-run scoped-counter python3 "$proof_dir/check-scope-counter.py" \
-    "$work/verifast/vfdeps-adf88dc/lib/libz3.so" "$logs/scoped-counter"
-run scoped-composition python3 "$proof_dir/check-scope-composition.py" \
-    "$work/verifast/vfdeps-adf88dc/lib/libz3.so" "$logs/scoped-composition"
 
 # Compile the clients in a standalone dependency-free package. Each file remains
 # a separate test crate so context-specific nightly features stay local to it.

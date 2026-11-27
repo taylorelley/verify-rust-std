@@ -1,12 +1,19 @@
 # Supplementary notes: scoped threads
 
-These checks are not part of the Challenge 7 claim. Challenge 7 covers the
-atomic constructors, the unsafe helpers and the intrinsics, which
-[`README.md`](README.md) lists. The threaded runtime clients in this directory
-use `std::thread::scope` to exercise concurrent atomic and non-atomic reads.
-The notes below record what VeriFast 26.10 can and cannot check about that API,
-and two abstract models of its thread counter. The `scoped-thread-boundary`,
-`scoped-counter` and `scoped-composition` replay steps run them.
+The Challenge 7 replay runs threaded clients that use `std::thread::scope`
+to exercise concurrent atomic and non-atomic reads. The supplementary
+analysis probes VeriFast support for the scoped-thread API and checks two
+abstract models of its thread counter.
+
+Run the analysis separately with the work directory from a Challenge 7 run
+that has built VeriFast.
+
+```sh
+bash verifast-proofs/core/sync/atomic.rs/replay-scoped-threads.sh /tmp/challenge-7
+```
+
+The command writes its logs and reports to `scoped-thread-evidence/` in that
+work directory.
 
 One finding may interest the standard library maintainers independently of
 Challenge 7. It is the `spawn_unchecked` overflow case described under

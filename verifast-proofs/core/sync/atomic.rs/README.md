@@ -100,9 +100,9 @@ verified copy. A toolchain update therefore fails only if it changes
 verified behavior. Intrinsic declarations remain pinned by excerpt, so any
 change to them forces a review of the trusted contracts.
 
-The `scoped-thread-boundary`, `scoped-counter` and `scoped-composition`
-steps check the threaded test clients. They are not part of the Challenge 7
-claim. See [`supplementary-scoped-threads.md`](supplementary-scoped-threads.md).
+The main replay runs the threaded clients under native Rust and Miri.
+[The supplementary scoped-thread analysis](supplementary-scoped-threads.md)
+has its own replay command.
 
 ## Generic unsafe helpers
 
