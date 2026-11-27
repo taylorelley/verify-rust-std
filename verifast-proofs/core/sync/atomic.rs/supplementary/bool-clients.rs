@@ -1,0 +1,69 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+
+const _: () = {
+    assert!(size_of::<AtomicBool>() == size_of::<bool>());
+    assert!(align_of::<AtomicBool>() == align_of::<bool>());
+};
+
+#[test]
+fn sharing_allows_atomic_stores_and_recovers_ordinary_access_after_join() {
+    for initial in [false, true] {
+        let mut backing = initial;
+        thread::scope(|scope| {
+            let first = unsafe { AtomicBool::from_ptr(&raw mut backing) };
+            assert_eq!(first.load(Ordering::Relaxed), initial);
+            for order in [Ordering::Relaxed, Ordering::Release, Ordering::SeqCst] {
+                scope.spawn(move || first.store(!initial, order));
+                scope.spawn(move || first.store(!initial, order));
+            }
+        });
+        assert_eq!(backing, !initial);
+        backing = initial;
+        assert_eq!(backing, initial);
+    }
+}
+
+#[test]
+fn initialized_storage_allows_concurrent_atomic_and_ordinary_reads() {
+    for initial in [false, true] {
+        let mut backing = initial;
+        thread::scope(|scope| {
+            let atomic = unsafe { AtomicBool::from_ptr(&raw mut backing) };
+            for order in [Ordering::Relaxed, Ordering::Acquire, Ordering::SeqCst] {
+                scope.spawn(move || assert_eq!(atomic.load(order), initial));
+            }
+            scope.spawn(move || {
+                let ordinary = atomic.as_ptr();
+                assert_eq!(unsafe { ordinary.read() }, initial);
+            });
+            scope.spawn(move || {
+                let bytes = atomic.as_ptr().cast::<u8>();
+                assert_eq!(unsafe { bytes.read() } != 0, initial);
+            });
+        });
+    }
+}
+
+#[test]
+fn invalid_store_orderings_panic_before_changing_storage() {
+    for initial in [false, true] {
+        let atomic = AtomicBool::new(initial);
+        for order in [Ordering::Acquire, Ordering::AcqRel] {
+            let result = std::panic::catch_unwind(|| atomic.store(!initial, order));
+            assert!(result.is_err());
+            assert_eq!(atomic.load(Ordering::Relaxed), initial);
+        }
+    }
+}
+
+#[test]
+fn invalid_load_orderings_panic_before_returning_a_value() {
+    for initial in [false, true] {
+        let atomic = AtomicBool::new(initial);
+        for order in [Ordering::Release, Ordering::AcqRel] {
+            assert!(std::panic::catch_unwind(|| atomic.load(order)).is_err());
+            assert_eq!(atomic.load(Ordering::Relaxed), initial);
+        }
+    }
+}

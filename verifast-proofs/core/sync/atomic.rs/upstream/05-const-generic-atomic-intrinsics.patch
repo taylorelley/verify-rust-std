@@ -1,0 +1,686 @@
+diff --git a/bin/rust/std/lib.rsspec b/bin/rust/std/lib.rsspec
+index a5d925d..7c8856d 100644
+--- a/bin/rust/std/lib.rsspec
++++ b/bin/rust/std/lib.rsspec
+@@ -148,6 +148,13 @@ mod num {
+         
+     }
+ 
++    impl usize {
++        fn wrapping_mul(self: usize, other: usize) -> usize;
++        //@ req true;
++        //@ ens true;
++        //@ on_unwind_ens false;
++    }
++
+     /*@
+     
+     lem init_ref_usize(p: *usize, coef: real);
+@@ -327,6 +334,50 @@ mod intrinsics {
+         req true;
+         ens atomic_align_of::<u8>() == 1;
+     
++    lem_auto atomic_align_of_u16();
++        req true;
++        ens atomic_align_of::<u16>() == 2;
++    lem_auto atomic_align_of_i8();
++        req true;
++        ens atomic_align_of::<i8>() == 1;
++
++    lem_auto atomic_align_of_i16();
++        req true;
++        ens atomic_align_of::<i16>() == 2;
++
++    lem_auto atomic_align_of_i32();
++        req true;
++        ens atomic_align_of::<i32>() == 4;
++
++    lem_auto atomic_align_of_u32();
++        req true;
++        ens atomic_align_of::<u32>() == 4;
++
++    lem_auto atomic_align_of_i64();
++        req true;
++        ens atomic_align_of::<i64>() == 8;
++
++    lem_auto atomic_align_of_u64();
++        req true;
++        ens atomic_align_of::<u64>() == 8;
++
++    lem_auto atomic_align_of_i128();
++        req true;
++        ens atomic_align_of::<i128>() == 16;
++
++    lem_auto atomic_align_of_u128();
++        req true;
++        ens atomic_align_of::<u128>() == 16;
++
++    lem_auto atomic_align_of_isize();
++        req true;
++        ens atomic_align_of::<isize>() == std::mem::size_of::<usize>();
++
++    // Thin pointer storage on the target uses the pointer-sized atomic ABI.
++    lem atomic_align_of_ptr<T>();
++        req true;
++        ens atomic_align_of::<*T>() == std::mem::size_of::<usize>();
++
+     lem_auto atomic_align_of_usize();
+         req true;
+         ens atomic_align_of::<usize>() == std::mem::size_of::<usize>();
+@@ -358,6 +409,146 @@ mod intrinsics {
+     //@ ens [f]atomic_points_to(dst, 1, inv_);
+     //@ on_unwind_ens false;
+     
++    // Atomic accesses to read-only memory are undefined behavior, except that
++    // sufficiently small Relaxed loads work there (see the core::sync::atomic
++    // module docs). A load therefore needs the full underlying byte permission,
++    // which denotes writable Rust storage, unless the translator dispatches it
++    // to atomic_load_relaxed_up_to_eight_bytes below.
++
++    unsafe fn atomic_load_relaxed<T>(src: *const T) -> T;
++    //@ req [?f]atomic_points_to(src as *T, 1, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_load_acquire<T>(src: *const T) -> T;
++    //@ req [?f]atomic_points_to(src as *T, 1, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_load_seqcst<T>(src: *const T) -> T;
++    //@ req [?f]atomic_points_to(src as *T, 1, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    // A non-volatile Relaxed load of at most eight bytes on x86-64 or AArch64
++    // Linux. It works on read-only memory, so any byte fraction suffices.
++    unsafe fn atomic_load_relaxed_up_to_eight_bytes<T>(src: *const T) -> T;
++    //@ req [?f]atomic_points_to(src as *T, ?permission, ?valid);
++    //@ ens [f]atomic_points_to(src as *T, permission, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    // Exchange preserves the slot invariant and returns a value satisfying it.
++    unsafe fn atomic_xchg_relaxed<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_acquire<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_release<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_acqrel<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xchg_seqcst<T>(dst: *mut T, val: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(val) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++
++    // Both forms may write, so both require full byte permission. The
++    // safety model permits either outcome and constrains the observed value.
++    unsafe fn atomic_cxchg_safety<T>(dst: *mut T, old: T, new: T) -> (T, bool);
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(old) == true &*& valid(new) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result.0) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_cxchgweak_safety<T>(dst: *mut T, old: T, new: T) -> (T, bool);
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(old) == true &*& valid(new) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result.0) == true;
++    //@ on_unwind_ens false;
++
++    //@ fix atomic_value_allowed<T>(allowed: bool, value: T) -> bool { allowed }
++
++    // Arithmetic is closed over the supported slot types. It may break
++    // a narrower invariant, such as a byte restricted to 0 and 1.
++    unsafe fn atomic_xadd_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xsub_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    //@ fix atomic_bool_byte(value: u8) -> bool { value == 0 || value == 1 }
++
++    unsafe fn atomic_and_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_and_byte_safety(dst: *mut u8, delta: u8) -> u8;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& (valid == (atomic_value_allowed)(true) || (valid == atomic_bool_byte && atomic_bool_byte(delta) == true));
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_nand_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_or_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_or_byte_safety(dst: *mut u8, delta: u8) -> u8;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& (valid == (atomic_value_allowed)(true) || (valid == atomic_bool_byte && atomic_bool_byte(delta) == true));
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xor_safety<T, U>(dst: *mut T, delta: U) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ ens [f]atomic_points_to(dst, 1, (atomic_value_allowed)(true));
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_xor_byte_safety(dst: *mut u8, delta: u8) -> u8;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& (valid == (atomic_value_allowed)(true) || (valid == atomic_bool_byte && atomic_bool_byte(delta) == true));
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    // Min and max select either the resident value or the supplied value.
++    // They preserve any invariant that also accepts the supplied value.
++    unsafe fn atomic_max_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_min_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_umax_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
++    unsafe fn atomic_umin_safety<T>(dst: *mut T, candidate: T) -> T;
++    //@ req [?f]atomic_points_to(dst, 1, ?valid) &*& valid(candidate) == true;
++    //@ ens [f]atomic_points_to(dst, 1, valid) &*& valid(result) == true;
++    //@ on_unwind_ens false;
++
+ }
+ 
+ mod mem {
+diff --git a/src/refinement_checker/refinement_checker.ml b/src/refinement_checker/refinement_checker.ml
+index b2a5588..1108c4e 100644
+--- a/src/refinement_checker/refinement_checker.ml
++++ b/src/refinement_checker/refinement_checker.ml
+@@ -429,10 +429,10 @@ let fns_to_be_inlined: (string * body) list =
+       [
+         {id={name="result"}; ty={kind=Param "T"}; mutability=Not; source_info={span}};
+         {id={name="self"}; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}; {kind=Type {kind=Param "A"}}]}}; mutability=Not; source_info={span}};
+-        {id={name="contents_ptr"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}; mutability=Not; source_info={span}};
++        {id={name="contents_ptr"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}; mutability=Not; source_info={span}};
+         {id={name="ref_self"}; ty={kind=Ref {region={id="'<erased>"}; mutability=Mut; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}; {kind=Type {kind=Param "A"}}]}}}}; mutability=Not; source_info={span}};
+         {id={name="drop_result"}; ty={kind=Tuple []}; mutability=Not; source_info={span}};
+-        {id={name="contents_ptr2"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}; mutability=Not; source_info={span}};
++        {id={name="contents_ptr2"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}; mutability=Not; source_info={span}};
+       ]
+     in
+     let basic_blocks: basic_block list =
+@@ -453,7 +453,7 @@ let fns_to_be_inlined: (string * body) list =
+                     local_is_mutable=false;
+                     kind=Other
+                   };
+-                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}
++                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}
+                 }
+               };
+               source_info={span}
+@@ -483,7 +483,7 @@ let fns_to_be_inlined: (string * body) list =
+                     local_is_mutable=false;
+                     kind=Other
+                   };
+-                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}
++                  ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}
+                 }
+               };
+               source_info={span}
+@@ -636,7 +636,7 @@ let fns_to_be_inlined: (string * body) list =
+   in
+   let local_decls: local_decl list =
+     [
+-      {id={name="result"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}; mutability=Not; source_info={span}};
++      {id={name="result"}; ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}; mutability=Not; source_info={span}};
+       {id={name="self"}; ty={kind=Ref {region={id="'<erased>"}; mutability=Not; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}}}; mutability=Not; source_info={span}};
+       {id={name="b"}; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}; mutability=Not; source_info={span}};
+     ]
+@@ -671,7 +671,7 @@ let fns_to_be_inlined: (string * body) list =
+                   local_is_mutable=false;
+                   kind=Other
+                 };
+-                ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}}
++                ty={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}}
+               }
+             };
+             source_info={span}
+@@ -688,7 +688,7 @@ let fns_to_be_inlined: (string * body) list =
+     def_path="std::boxed::Box::<T, A>::as_ptr";
+     module_def_path="std::boxed";
+     contract={annotations=[]; span};
+-    output={kind=RawPtr {mutability=Not; ty={kind=Param "T"}}};
++    output={kind=RawPtr {mutability=Not; ty={kind=Param "T"}; is_thin=false}};
+     inputs=[
+       {kind=Ref {region={id="'<erased>"}; mutability=Not; ty={kind=Adt {id={name="std::boxed::Box"}; kind=StructKind; substs=[{kind=Type {kind=Param "T"}}]}}}};
+     ];
+diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
+index 479346e..6ae08be 100644
+--- a/src/rust_frontend/vf_mir/vf_mir.capnp
++++ b/src/rust_frontend/vf_mir/vf_mir.capnp
+@@ -323,6 +323,7 @@ struct TyKind {
+     struct RawPtrTy {
+         ty @0: Ty;
+         mutability @1: Mutability;
++        isThin @2: Bool; # Concrete pointer has a single scalar layout.
+     }
+ 
+     struct RefTy {
+diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+index 3823e81..d23d038 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+@@ -1949,9 +1949,27 @@ use rustc_span::RemapPathScopeComponents;
+                     Self::encode_ty_adt(tcx, enc_ctx, *adt_def, substs, adt_ty_cpn);
+                 }
+                 ty::TyKind::Foreign(_) => ty_kind_cpn.set_foreign(()),
+-                ty::TyKind::RawPtr(ty, mutability) => {
+-                    let raw_ptr_ty_cpn = ty_kind_cpn.init_raw_ptr();
+-                    Self::encode_ty_raw_ptr(tcx, enc_ctx, *ty, *mutability, raw_ptr_ty_cpn);
++                ty::TyKind::RawPtr(pointee, mutability) => {
++                    use rustc_middle::ty::TypeVisitableExt;
++                    let mut raw_ptr_ty_cpn = ty_kind_cpn.init_raw_ptr();
++                    // A pointer to a generic pointee is thin if rustc can lay it out in the
++                    // enclosing function's typing environment, e.g. *mut T with T: Sized.
++                    let env = if !ty.has_param() {
++                        Some(ty::TypingEnv::fully_monomorphized())
++                    } else if let EncKind::Body(body) = enc_ctx.mode {
++                        Some(ty::TypingEnv::post_analysis(tcx, body.source.def_id()))
++                    } else {
++                        None
++                    };
++                    if let (Some(env), false, false) = (env, ty.has_aliases(), ty.has_escaping_bound_vars()) {
++                        if let Ok(layout) = tcx.layout_of(env.as_query_input(ty)) {
++                            raw_ptr_ty_cpn.set_is_thin(
++                                matches!(layout.backend_repr, rustc_abi::BackendRepr::Scalar(_))
++                                    && layout.size == tcx.data_layout.pointer_size(),
++                            );
++                        }
++                    }
++                    Self::encode_ty_raw_ptr(tcx, enc_ctx, *pointee, *mutability, raw_ptr_ty_cpn);
+                 }
+                 ty::TyKind::Ref(region, ty, mutability) => {
+                     let ref_ty_cpn = ty_kind_cpn.init_ref();
+diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+index 43d7f3d..3829a0e 100644
+--- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
++++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+@@ -1484,6 +1484,159 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+         "std::mem::ManuallyDrop::deref_mut"
+     | _ -> name
+ 
++  (* Dispatch concrete atomic operations to the matching primitive contract.
++     The pinned compiler exports AtomicOrdering as the enum variant index. *)
++  and specialize_atomic_access small_relaxed_loads (fn_ty : D.ty_kind_fn_def_ty) loc =
++    match fn_ty.id.name with
++    | ("core::intrinsics::atomic_store" | "std::intrinsics::atomic_store" |
++       "core::intrinsics::atomic_load" | "std::intrinsics::atomic_load" |
++       "core::intrinsics::atomic_xchg" | "std::intrinsics::atomic_xchg" |
++       "core::intrinsics::atomic_max" | "std::intrinsics::atomic_max" |
++       "core::intrinsics::atomic_min" | "std::intrinsics::atomic_min" |
++       "core::intrinsics::atomic_umax" | "std::intrinsics::atomic_umax" |
++       "core::intrinsics::atomic_umin" | "std::intrinsics::atomic_umin") as name ->
++        let operation = List.hd (List.rev (String.split_on_char ':' name)) in
++        let extremum = List.mem operation ["atomic_min"; "atomic_max"; "atomic_umin"; "atomic_umax"] in
++        let has_volatile_arg = operation = "atomic_store" || operation = "atomic_load" in
++        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
++        let shape_error () =
++          let operand_order = "expected a concrete integer or thin pointer, a concrete AtomicOrdering" in
++          reject (if extremum then "expected a concrete integer and a concrete AtomicOrdering"
++                  else if operation = "atomic_xchg" then "expected a concrete integer or thin pointer and a concrete AtomicOrdering"
++                  else operand_order ^ ", and VOLATILE=false")
++        in
++        (match fn_ty.substs with
++        | ({kind = Type {kind = operand_type}} as operand) ::
++          {kind = Const {kind = Value {
++             ty = {kind = Adt {
++               id = {name = ("core::intrinsics::AtomicOrdering" |
++                             "std::intrinsics::AtomicOrdering")};
++               kind = EnumKind; substs = [];
++             }};
++             val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++               val_tree = Leaf {data = order; size = 4}}}];
++           }}} :: rest when fn_ty.late_bound_generic_param_count = 0 ->
++            (match operation, operand_type with
++            (* A generic operand is verified once for all instantiations, since
++               the primitive contract is parametric in T. Rustc rejects
++               non-integer, non-pointer instantiations during monomorphization.
++               The concrete cases above check the instantiations used by
++               core::sync::atomic, including the thin-pointer restriction. *)
++            | _, Param _ -> ()
++            | ("atomic_max" | "atomic_min"), Int _ -> ()
++            | ("atomic_umax" | "atomic_umin"), UInt _ -> ()
++            | _, _ when extremum -> reject "expected an integer operand matching the comparison signedness"
++            | _, (Int _ | UInt _ | RawPtr {is_thin = true; _}) -> ()
++            | _ -> shape_error ());
++            (* [known_ordinary] holds when the access is known not to be volatile. *)
++            let known_ordinary =
++              match rest with
++              | [] when not has_volatile_arg -> true
++              | [{kind = Const {kind = Value {
++                   ty = {kind = Bool};
++                   val_tree = Leaf {data = volatile; size = 1};
++                 }}}] when has_volatile_arg ->
++                  if Stdint.Uint128.to_string (DecoderAux.uint128_get volatile) <> "0" then
++                    reject "only ordinary accesses (VOLATILE=false) are modeled";
++                  true
++              (* A generic VOLATILE flag gets the ordinary-access contract that
++                 requires writable storage. It is at least as strong as the
++                 requirements of a volatile access. *)
++              | [{kind = Const {kind = Param _}}] when has_volatile_arg -> false
++              | _ -> shape_error ()
++            in
++            let suffix =
++              match Stdint.Uint128.to_string (DecoderAux.uint128_get order) with
++              | "0" -> "relaxed"
++              | "1" when operation <> "atomic_load" -> "release"
++              | "2" when operation <> "atomic_store" -> "acquire"
++              | "3" when not has_volatile_arg -> "acqrel"
++              | "4" -> "seqcst"
++              | _ -> reject "unsupported ordering for an ordinary access"
++            in
++            (* Only a non-volatile Relaxed load of at most eight bytes on a
++               target where such loads work on read-only memory may use a
++               read fraction (see the core::sync::atomic module docs). *)
++            let contract =
++              if extremum then "safety"
++              else if operation = "atomic_load" && suffix = "relaxed"
++                      && small_relaxed_loads && known_ordinary
++                      && (match operand_type with
++                          | Int (I8 | I16 | I32 | I64 | ISize)
++                          | UInt (U8 | U16 | U32 | U64 | USize)
++                          | RawPtr {is_thin = true; _} -> true
++                          | _ -> false)
++              then "relaxed_up_to_eight_bytes"
++              else suffix
++            in
++            Some ("std::intrinsics::" ^ operation ^ "_" ^ contract, [operand])
++        | _ -> shape_error ())
++    | ("core::intrinsics::atomic_cxchg" | "std::intrinsics::atomic_cxchg" |
++       "core::intrinsics::atomic_cxchgweak" | "std::intrinsics::atomic_cxchgweak") as name ->
++        let operation = if Filename.check_suffix name "atomic_cxchgweak" then "atomic_cxchgweak" else "atomic_cxchg" in
++        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
++        let decode_order (arg : D.generic_arg) =
++          match arg.kind with
++          | Const {kind = Value {
++              ty = {kind = Adt {
++                id = {name = ("core::intrinsics::AtomicOrdering" |
++                              "std::intrinsics::AtomicOrdering")};
++                kind = EnumKind; substs = [];
++              }};
++              val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++                val_tree = Leaf {data = order; size = 4}}}];
++            }} -> Stdint.Uint128.to_string (DecoderAux.uint128_get order)
++          | _ -> reject "expected a concrete AtomicOrdering"
++        in
++        (match fn_ty.substs with
++        | [({kind = Type {kind = (Int _ | UInt _ | RawPtr {is_thin = true; _} | Param _)}} as operand);
++           success; failure] when fn_ty.late_bound_generic_param_count = 0 ->
++            (match decode_order success, decode_order failure with
++            | ("0" | "1" | "2" | "3" | "4"), ("0" | "2" | "4") ->
++                (* Ordering variants share the storage-safety contract. *)
++                Some ("std::intrinsics::" ^ operation ^ "_safety", [operand])
++            | _ -> reject "unsupported success or failure ordering")
++        | _ -> reject "expected a concrete integer or thin pointer and two orderings")
++    | ("core::intrinsics::atomic_xadd" | "std::intrinsics::atomic_xadd" |
++       "core::intrinsics::atomic_xsub" | "std::intrinsics::atomic_xsub" |
++       "core::intrinsics::atomic_and" | "std::intrinsics::atomic_and" |
++       "core::intrinsics::atomic_nand" | "std::intrinsics::atomic_nand" |
++       "core::intrinsics::atomic_or" | "std::intrinsics::atomic_or" |
++       "core::intrinsics::atomic_xor" | "std::intrinsics::atomic_xor") as name ->
++        let operation = List.hd (List.rev (String.split_on_char ':' name)) in
++        let reject reason = Ast.static_error loc (operation ^ ": " ^ reason) None in
++        (match fn_ty.substs with
++        | [({kind = Type {kind = slot_ty}} as slot);
++           ({kind = Type {kind = delta_ty}} as delta);
++           {kind = Const {kind = Value {
++              ty = {kind = Adt {
++                id = {name = ("core::intrinsics::AtomicOrdering" |
++                              "std::intrinsics::AtomicOrdering")};
++                kind = EnumKind; substs = [];
++              }};
++              val_tree = Branch [{kind = Value {ty = {kind = UInt U32};
++                val_tree = Leaf {data = order; size = 4}}}];
++            }}}] when fn_ty.late_bound_generic_param_count = 0 ->
++            (match slot_ty, delta_ty with
++            | Int slot, Int delta when slot = delta -> ()
++            | UInt slot, UInt delta when slot = delta -> ()
++            | RawPtr {is_thin = true; _}, UInt USize when operation <> "atomic_nand" -> ()
++            | Param _, Param _ -> ()
++            | _ -> reject "expected matching integer operands or a concrete thin pointer with a usize delta");
++            (match Stdint.Uint128.to_string (DecoderAux.uint128_get order) with
++            | "0" | "1" | "2" | "3" | "4" ->
++                (* Each ordering uses the same storage-safety contract. *)
++                let contract, operands =
++                  match operation, slot_ty with
++                  | ("atomic_and" | "atomic_or" | "atomic_xor"), UInt U8 ->
++                      "_byte_safety", []
++                  | _ -> "_safety", [slot; delta]
++                in
++                Some ("std::intrinsics::" ^ operation ^ contract, operands)
++            | _ -> reject "unsupported arithmetic ordering")
++        | _ -> reject "expected two concrete operand types and a concrete AtomicOrdering")
++    | _ -> None
++
+   and translate_fn_def_ty (fn_def_ty_cpn : D.ty_kind_fn_def_ty) (loc : Ast.loc)
+       =
+     let id_cpn = fn_def_ty_cpn.id in
+@@ -1957,6 +2110,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+   type body_tr_defs_ctx = {
+     adt_defs : Mir.adt_def_tr list;
+     directives : Mir.annot list;
++    small_relaxed_loads : bool;
+     fn_specializer : string -> D.generic_arg list -> string * D.generic_arg list;
+   }
+ 
+@@ -2414,17 +2568,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+       | `TrOperandMove (Var (_, fn_name), place_is_mutable) ->
+           translate_regular_fn_call [] fn_name
+       | `TrTypedConstantFn fn_def_ty_cpn -> (
+-          let fn_name = fn_def_ty_cpn.id.name in
+-          let substs_cpn = fn_def_ty_cpn.substs in
+-          let fn_name = translate_fn_name fn_name substs_cpn in
+-          let substs_cpn =
+-            substs_cpn
+-            @ List.init fn_def_ty_cpn.late_bound_generic_param_count
+-                (fun i : D.generic_arg ->
+-                  { kind = Lifetime { id = "'erased" } })
+-          in
+           let fn_name, substs_cpn =
+-            Args.body_tr_defs_ctx.fn_specializer fn_name substs_cpn
++            match specialize_atomic_access Args.body_tr_defs_ctx.small_relaxed_loads fn_def_ty_cpn call_loc with
++            | Some specialization -> specialization
++            | None ->
++                let substs = fn_def_ty_cpn.substs in
++                let fn_name = translate_fn_name fn_def_ty_cpn.id.name substs in
++                let substs =
++                  substs @ List.init fn_def_ty_cpn.late_bound_generic_param_count
++                    (fun _ : D.generic_arg -> {kind = Lifetime {id = "'erased"}})
++                in
++                Args.body_tr_defs_ctx.fn_specializer fn_name substs
+           in
+           let* substs =
+             ListAux.try_map
+@@ -7720,8 +7874,8 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+     | UInt uintTy1, UInt uintTy2 -> if uintTy1 = uintTy2 then Some env else None
+     | Adt { id = id1; substs = substs1 }, Adt { id = id2; substs = substs2 } ->
+         if canonicalize_item_name id1.name = canonicalize_item_name id2.name then match_gen_arg_lists env substs1 substs2 else None
+-    | ( RawPtr { ty = ty1; mutability = mut1 },
+-        RawPtr { ty = ty2; mutability = mut2 } ) ->
++    | ( RawPtr { ty = ty1; mutability = mut1; _ },
++        RawPtr { ty = ty2; mutability = mut2; _ } ) ->
+         if mut1 = mut2 then match_types env ty1 ty2 else None
+     | _ -> None
+ 
+@@ -8190,8 +8344,15 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+             bodies_cpn
+         else bodies_cpn
+       in
++      (* The core::sync::atomic docs guarantee that Relaxed loads of at most
++         eight bytes work on read-only memory when target_arch is x86_64 or
++         aarch64. *)
++      let small_relaxed_loads =
++        let triple = VfMirRd.VfMir.target_triple_get vf_mir_cpn in
++        List.exists (fun arch -> String.starts_with ~prefix:arch triple) ["x86_64-"; "aarch64-"]
++      in
+       let body_tr_defs_ctx =
+-        { adt_defs; directives = vf_mir_translator_directives; fn_specializer }
++        { adt_defs; directives = vf_mir_translator_directives; small_relaxed_loads; fn_specializer }
+       in
+       (* Ghost code in an inherent impl refers to the impl's self type as Self. Each
+          such function gets a type alias for it, generic over the impl's parameters. *)
+diff --git a/tests/rust/purely_unsafe/atomic_intrinsics.rs b/tests/rust/purely_unsafe/atomic_intrinsics.rs
+new file mode 100644
+index 0000000..254b989
+--- /dev/null
++++ b/tests/rust/purely_unsafe/atomic_intrinsics.rs
+@@ -0,0 +1,75 @@
++// Atomic intrinsics with const-generic orderings, for concrete and generic operands.
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++// Atomic accesses to read-only memory are UB, so loads need the full byte
++// permission (writable storage)...
++unsafe fn load_u16(p: *mut u16) -> u16
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_);
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_load::<u16, { AO::Acquire }, false>(p) }
++}
++
++// ...except a non-volatile Relaxed load of at most eight bytes on x86_64 and
++// aarch64, which works on read-only memory. This test runs on those targets.
++unsafe fn load_u16_relaxed_read_only(p: *mut u16) -> u16
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_);
++//@ ens [f]std::intrinsics::atomic_points_to(p, perm, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_load::<u16, { AO::Relaxed }, false>(p) }
++}
++
++unsafe fn load_u16_acquire_read_only(p: *mut u16) -> u16
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_) &*& perm != 1;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<u16, { AO::Acquire }, false>(p) } //~should_fail
++}
++
++unsafe fn load_u128_relaxed_read_only(p: *mut u128) -> u128
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_) &*& perm != 1;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<u128, { AO::Relaxed }, false>(p) } //~should_fail
++}
++
++// A load whose volatility is a parameter gets the writable-storage contract.
++unsafe fn load_maybe_volatile_read_only<const VOLATILE: bool>(p: *mut u16) -> u16
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_) &*& perm != 1;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_load::<u16, { AO::Relaxed }, VOLATILE>(p) } //~should_fail
++}
++
++unsafe fn store<T: Copy, const VOLATILE: bool>(p: *mut T, v: T)
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_);
++{
++    unsafe { intrinsics::atomic_store::<T, { AO::Release }, VOLATILE>(p, v) }
++}
++
++unsafe fn swap<T: Copy>(p: *mut T, v: T) -> T
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_xchg::<T, { AO::AcqRel }>(p, v) }
++}
++
++// The pointee is generic but Sized, so the pointer operand is thin.
++unsafe fn swap_ptr<T>(p: *mut *mut T, v: *mut T) -> *mut T
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_) &*& inv_(result) == true;
++{
++    unsafe { intrinsics::atomic_xchg::<*mut T, { AO::AcqRel }>(p, v) }
++}
++
++unsafe fn store_read_only(p: *mut u16)
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_) &*& perm != 1 &*& inv_(0) == true;
++//@ ens true;
++{
++    unsafe { intrinsics::atomic_store::<u16, { AO::Relaxed }, false>(p, 0) } //~should_fail
++}
++
++fn main() {}
+diff --git a/tests/rust/purely_unsafe/atomic_intrinsics_bad_ordering.rs b/tests/rust/purely_unsafe/atomic_intrinsics_bad_ordering.rs
+new file mode 100644
+index 0000000..58ee012
+--- /dev/null
++++ b/tests/rust/purely_unsafe/atomic_intrinsics_bad_ordering.rs
+@@ -0,0 +1,13 @@
++// An illegal ordering at an atomic intrinsic call is a static error.
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++unsafe fn release_load(p: *mut u8) -> u8
++//@ req [?f]std::intrinsics::atomic_points_to(p, ?perm, ?inv_);
++//@ ens [f]std::intrinsics::atomic_points_to(p, perm, inv_);
++{
++    unsafe { intrinsics::atomic_load::<u8, { AO::Release }, false>(p) }
++}
++
++fn main() {}
+diff --git a/tests/rust/purely_unsafe/atomic_intrinsics_wide_ptr.rs b/tests/rust/purely_unsafe/atomic_intrinsics_wide_ptr.rs
+new file mode 100644
+index 0000000..8bebb16
+--- /dev/null
++++ b/tests/rust/purely_unsafe/atomic_intrinsics_wide_ptr.rs
+@@ -0,0 +1,13 @@
++// A wide pointer operand is rejected, also when its pointee is generic.
++#![feature(core_intrinsics)]
++#![allow(internal_features)]
++use std::intrinsics::{self, AtomicOrdering as AO};
++
++unsafe fn swap_wide<T: ?Sized>(p: *mut *mut T, v: *mut T) -> *mut T
++//@ req [?f]std::intrinsics::atomic_points_to(p, 1, ?inv_) &*& inv_(v) == true;
++//@ ens [f]std::intrinsics::atomic_points_to(p, 1, inv_);
++{
++    unsafe { intrinsics::atomic_xchg::<*mut T, { AO::AcqRel }>(p, v) }
++}
++
++fn main() {}
+diff --git a/tests/rust/testsuite.mysh b/tests/rust/testsuite.mysh
+index 5a5b840..1d3f379 100644
+--- a/tests/rust/testsuite.mysh
++++ b/tests/rust/testsuite.mysh
+@@ -39,6 +39,9 @@ popd
+ verifast -ignore_ref_creation -allow_assume nonnull.rs
+ verifast -skip_specless_fns nonnull_into.rs
+ cd purely_unsafe
++  verifast -allow_should_fail -allow_dead_code atomic_intrinsics.rs
++  !verifast atomic_intrinsics_bad_ordering.rs
++  !verifast atomic_intrinsics_wide_ptr.rs
+   verifast enum_discr.rs
+   verifast -ignore_unwind_paths leftpad.rs
+   verifast arrays.rs

@@ -1,0 +1,257 @@
+diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+index 9621ba9..515b952 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+@@ -930,6 +930,7 @@ use rustc_span::RemapPathScopeComponents;
+             // Encode traits (consumes annotations)
+             self.encode_traits(&mut req_adt_defs, vf_mir_cpn.reborrow());
+ 
++            let mut expansion_spans = Vec::new();
+             vf_mir_cpn.fill_bodies(&self.bodies, |mut body_cpn, (body, span)| {
+                 Self::encode_span_data(
+                     self.tcx,
+@@ -937,17 +938,24 @@ use rustc_span::RemapPathScopeComponents;
+                     body_cpn.reborrow().init_fn_sig_span(),
+                 );
+                 let body_span = body.span.data();
+-                let mut annots = self
+-                    .annots
+-                    .extract_if(|annot| {
+-                        body_span.contains(
+-                            annot
+-                                .span()
+-                                .expect("Dummy annot found during serialization")
+-                                .data(),
+-                        )
+-                    })
+-                    .collect::<LinkedList<_>>();
++                let in_body = |annot: &Box<GhostRange>| {
++                    body_span.contains(
++                        annot
++                            .span()
++                            .expect("Dummy annot found during serialization")
++                            .data(),
++                    )
++                };
++                // All expansions of a macro share the annotations written in the macro
++                // body, so each such body gets its own copy. They are removed once all
++                // bodies are encoded.
++                let mut annots = if body.span.from_expansion() {
++                    let shared = self.annots.iter().filter(|annot| in_body(annot)).cloned().collect::<LinkedList<_>>();
++                    expansion_spans.push(body_span);
++                    shared
++                } else {
++                    self.annots.extract_if(|annot| in_body(annot)).collect::<LinkedList<_>>()
++                };
+                 let mut_annots = annots.extract_if(|annot| {
+                     annot.kind == GhostRangeKind::Mut
+                 }).map(|annot| {
+@@ -958,6 +966,12 @@ use rustc_span::RemapPathScopeComponents;
+                 Self::encode_body(&mut enc_ctx, body_cpn);
+                 req_adt_defs.extend(enc_ctx.get_req_adts());
+             });
++            for span in expansion_spans {
++                let _ = self
++                    .annots
++                    .extract_if(|annot| span.contains(annot.span().expect("Dummy annot").data()))
++                    .count();
++            }
+ 
+             // Encode directives
+             vf_mir_cpn.fill_directives(&self.directives, |directive_cpn, directive| {
+diff --git a/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs b/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs
+index e0fcd7c..4c5ca4f 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/preprocessor.rs
+@@ -68,7 +68,7 @@ pub enum GhostRangeKind {
+     Mut,
+ }
+ 
+-#[derive(Debug)]
++#[derive(Clone, Debug)]
+ pub struct GhostRange {
+     in_fn_body: bool,
+     pub kind: GhostRangeKind,
+diff --git a/src/verifast.ml b/src/verifast.ml
+index 2b64679..51fd11b 100644
+--- a/src/verifast.ml
++++ b/src/verifast.ml
+@@ -1399,7 +1399,10 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+             end
+           | Some (PredCtorInfo (lp, predctor_tparams, ps1, ps2, inputParamCount, body, funcsym)) ->
+             reportUseSite DeclKind_Predicate lp l;
++            (* Without explicit type arguments, they are inferred from the constructor arguments. *)
++            let infer_targs = targs = [] && predctor_tparams <> [] in
+             let tpenv =
++              if infer_targs then List.map (fun x -> (x, InferredType (object end, ref Unconstrained))) predctor_tparams else
+               match zip predctor_tparams targs with
+                 Some bs -> bs
+               | None -> static_error l "Incorrect number of type arguments" None
+@@ -1417,6 +1420,14 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+                 | _ -> static_error l "Predicate constructor arguments must be expressions." None
+                 end
+             in
++            let tpenv =
++              if not infer_targs then tpenv else
++              tpenv |> List.map begin fun (x, tp) ->
++                match unfold_inferred_type tp with
++                  InferredType _ -> static_error l ("Cannot infer type argument " ^ x ^ " of this predicate constructor; please supply the type arguments.") None
++                | tp -> (x, tp)
++              end
++            in
+             let targs_typeids = List.map (fun (x, tp) -> (x ^ "_typeid", typeid_of_core l env tp)) tpenv in
+             let g_symb = mk_app funcsym (List.map snd targs_typeids @ List.map (fun (x, t) -> t) bs0) in
+             let ps2 = List.map (fun (x, t) -> (x, t, instantiate_type tpenv t)) ps2 in
+@@ -1751,9 +1762,12 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+               end
+             | Some (PredCtorInfo (lpred, predctor_tparams, ps1, ps2, inputParamCount, body, funcsym)) ->
+               reportUseSite DeclKind_Predicate lpred l;
++              (* Without explicit type arguments, they are inferred from the constructor arguments. *)
++              let infer_targs = targs = [] && predctor_tparams <> [] in
+               let tpenv =
++                if infer_targs then List.map (fun x -> (x, InferredType (object end, ref Unconstrained))) predctor_tparams else
+                 match zip predctor_tparams targs with
+-                  Some tpenv -> tpenv
++                  Some bs -> bs
+                 | None -> static_error l "Incorrect number of type arguments" None
+               in
+               let bs0 =
+@@ -1769,6 +1783,14 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+                   | _ -> static_error l "Predicate constructor arguments must be expressions." None
+                   end
+               in
++              let tpenv =
++                if not infer_targs then tpenv else
++                tpenv |> List.map begin fun (x, tp) ->
++                  match unfold_inferred_type tp with
++                    InferredType _ -> static_error l ("Cannot infer type argument " ^ x ^ " of this predicate constructor; please supply the type arguments.") None
++                  | tp -> (x, tp)
++                end
++              in
+               let targs_typeids = List.map (fun (x, tp) -> (x ^ "_typeid", typeid_of_core l env tp)) tpenv in
+               let g_symb = mk_app funcsym (List.map snd targs_typeids @ List.map (fun (x, t) -> t) bs0) in
+               (lpred, [], tpenv, ps2, targs_typeids @ bs0, (g_symb, false), body, [], inputParamCount)
+diff --git a/src/verifast1.ml b/src/verifast1.ml
+index e0bff63..18dda06 100644
+--- a/src/verifast1.ml
++++ b/src/verifast1.ml
+@@ -7036,6 +7036,9 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+               | Some bs -> (targs, bs, [])
+           in
+           if List.length ps0 <> List.length ts0 then static_error l "Incorrect number of indexes." None;
++          (* The arguments of a generic predicate constructor have types that mention
++             its type parameters, like the predicate's own parameters. *)
++          let ts0 = List.map (instantiate_type tpenv) ts0 in
+           let (wps0, tenv) = check_pats (pn,ilist) l tparams tenv ts0 ps0 in
+           let xs' = List.map (instantiate_type tpenv) xs in
+           let (wps, tenv) = check_pats (pn,ilist) l tparams tenv xs' ps in
+diff --git a/tests/rust/macro_fn_specs.rs b/tests/rust/macro_fn_specs.rs
+new file mode 100644
+index 0000000..dbda5cb
+--- /dev/null
++++ b/tests/rust/macro_fn_specs.rs
+@@ -0,0 +1,17 @@
++// Annotations written in a macro body apply to every expansion of the macro.
++macro_rules! constant_fn {
++    ($name:ident, $value:expr) => {
++        pub fn $name() -> i32
++        //@ req true;
++        //@ ens result == 1; //~should_fail
++        {
++            $value
++        }
++    };
++}
++
++constant_fn!(one, 1);
++// Without a shared contract, the second expansion would be skipped as specless.
++constant_fn!(two, 2);
++
++fn main() {}
+diff --git a/tests/rust/pred_ctor_generic_args.rs b/tests/rust/pred_ctor_generic_args.rs
+new file mode 100644
+index 0000000..9bf4b33
+--- /dev/null
++++ b/tests/rust/pred_ctor_generic_args.rs
+@@ -0,0 +1,34 @@
++// A generic predicate constructor applied in a generic lemma's contract. Its
++// arguments must be checked against its instantiated parameter types.
++struct Wrap<T> {
++    x: T,
++}
++
++/*@
++
++pred_ctor holds<T>(p: *T)(;) = *p |-> ?v;
++
++lem wrap_holds<V>(p: *Wrap<V>)
++    req [?f]holds::<Wrap<V> >(p)();
++    ens [f](*p |-> ?v);
++{
++    open [f]holds::<Wrap<V> >(p)();
++}
++
++lem wrap_holds_inferred<V>(p: *Wrap<V>)
++    req [?f]holds(p)();
++    ens [f](*p |-> ?v);
++{
++    open [f]holds::<Wrap<V> >(p)();
++}
++
++lem wrap_holds_bad<V>(p: *Wrap<V>, q: *V)
++    req [?f]holds::<Wrap<V> >(q)(); //~should_fail
++    ens true;
++{
++    assume(false);
++}
++
++@*/
++
++fn main() {}
+diff --git a/tests/rust/pred_ctor_infer_targs.rs b/tests/rust/pred_ctor_infer_targs.rs
+new file mode 100644
+index 0000000..558618a
+--- /dev/null
++++ b/tests/rust/pred_ctor_infer_targs.rs
+@@ -0,0 +1,27 @@
++// The type arguments of a generic predicate constructor are inferred from its
++// arguments in open and close statements.
++/*@
++
++pred_ctor holds<T>(p: *T)() = *p |-> ?v;
++
++pred_ctor holds_any<T>(n: i32)() = true;
++
++lem roundtrip(p: *u16)
++    req *p |-> ?v;
++    ens *p |-> _;
++{
++    close holds(p)();
++    open holds(p)();
++}
++
++lem not_inferable()
++    req true;
++    ens true;
++{
++    close holds_any(0)(); //~should_fail
++    leak holds_any::<u8>(0)();
++}
++
++@*/
++
++fn main() {}
+diff --git a/tests/rust/testsuite.mysh b/tests/rust/testsuite.mysh
+index 3c5ed1d..c3b6b0b 100644
+--- a/tests/rust/testsuite.mysh
++++ b/tests/rust/testsuite.mysh
+@@ -17,6 +17,9 @@ verifast -allow_should_fail -allow_dead_code assume_stmt.rs
+ verifast hidden_locals.rs
+ verifast -allow_should_fail -allow_dead_code this_pred.rs
+ verifast use_decls_in_modules.rs
++verifast -allow_should_fail -allow_assume -allow_dead_code pred_ctor_generic_args.rs
++verifast -allow_should_fail macro_fn_specs.rs
++verifast -allow_should_fail -allow_dead_code pred_ctor_infer_targs.rs
+ begin_sequential
+ cd unverified
+   cd platform

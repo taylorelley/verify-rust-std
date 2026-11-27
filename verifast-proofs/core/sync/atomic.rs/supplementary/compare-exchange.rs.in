@@ -1,0 +1,33 @@
+    pub const fn $METHOD<'a>(&'a self, current: $PUBLIC, new: $PUBLIC,
+                             success: Ordering, failure: Ordering) -> Result<$PUBLIC, $PUBLIC>
+    //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<$ATOMIC>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, success) &*& <Ordering>.own(currentThread, failure);
+    //@ ens thread_token(currentThread) &*& [q]lifetime_token('a) &*& <std::result::Result<$PUBLIC, $PUBLIC>>.own(currentThread, result);
+    //@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    {
+        //@ leak <Ordering>.own(_, _);
+        //@ leak <Ordering>.own(_, _);
+        //@ close exists::<*$ATOMIC>(self);
+        //@ close exists::<lifetime_t>('a);
+        $BODY
+    }
+// HELPER
+const unsafe fn atomic_$METHOD(dst: *mut $OPERAND, old: $OPERAND, new: $OPERAND,
+                              success: Ordering, failure: Ordering) -> Result<$OPERAND, $OPERAND>
+//@ req thread_token(currentThread) &*& exists::<*$ATOMIC>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]${ATOMIC}_share(k, currentThread, atomic) &*& dst == ref_origin(atomic) as *$OPERAND &*& $VALID(old) == true &*& $VALID(new) == true;
+//@ ens thread_token(currentThread) &*& [q]lifetime_token(k) &*& <std::result::Result<$OPERAND, $OPERAND>>.own(currentThread, result) &*& (match result { Result::Ok(v) => $VALID(v) == true, Result::Err(v) => $VALID(v) == true });
+//@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token(k);
+{
+    //@ open exists::<*$ATOMIC>(atomic);
+    //@ open exists::<lifetime_t>(k);
+    let (val, ok) = unsafe {
+        match (success, failure) {
+$BRANCHES
+            (_, AcqRel) => panic!("there is no such thing as an acquire-release failure ordering"),
+            (_, Release) => panic!("there is no such thing as a release failure ordering"),
+        }
+    };
+    //@ close $OWN(currentThread, val);
+    let outcome = if ok { Ok(val) } else { Err(val) };
+    //@ close <std::result::Result<$OPERAND, $OPERAND>>.own(currentThread, outcome);
+    outcome
+}

@@ -1,0 +1,228 @@
+#![feature(core_intrinsics)]
+#![allow(internal_features)]
+
+use std::intrinsics::{self, AtomicOrdering as AO};
+use Ordering::*;
+
+#[derive(Copy, Clone)]
+#[non_exhaustive]
+pub enum Ordering {
+    Relaxed,
+    Release,
+    Acquire,
+    AcqRel,
+    SeqCst,
+}
+
+// STORE METHOD
+    pub const fn load<'a>(&'a self, order: Ordering) -> bool
+    //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<AtomicBool>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
+    //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    //@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    {
+        unsafe {
+            //@ leak <Ordering>.own(_, _);
+            //@ close exists::<*AtomicBool>(self);
+            //@ close exists::<lifetime_t>('a);
+            atomic_load(self.v.get().cast::<u8>(), order) != 0
+        }
+    }
+
+    pub const fn store<'a>(&'a self, val: bool, order: Ordering)
+    //@ req thread_token(currentThread) &*& [?q]lifetime_token('a) &*& [_](<AtomicBool>.share('a, currentThread, self)) &*& <Ordering>.own(currentThread, order);
+    //@ ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    //@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token('a);
+    {
+        unsafe {
+            //@ leak <Ordering>.own(_, _);
+            //@ close exists::<*AtomicBool>(self);
+            //@ close exists::<lifetime_t>('a);
+            atomic_store(self.v.get().cast::<u8>(), val as u8, order);
+        }
+    }
+
+// STORE HELPER
+// Open the borrow only in branches that reach a non-unwinding intrinsic.
+// On invalid orderings the caller's lifetime and thread tokens reach the
+// panic unchanged.
+const unsafe fn atomic_store(dst: *mut u8, val: u8, order: Ordering)
+//@ req thread_token(currentThread) &*& exists::<*AtomicBool>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]AtomicBool_share(k, currentThread, atomic) &*& dst == ref_origin(atomic) as *u8 &*& accepts_u8(val) == true;
+//@ ens thread_token(currentThread) &*& [q]lifetime_token(k);
+//@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token(k);
+{
+    //@ open exists::<*AtomicBool>(atomic);
+    //@ open exists::<lifetime_t>(k);
+    // SAFETY: the caller must uphold the safety contract for `atomic_store`.
+    unsafe {
+        match order {
+            Relaxed => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(dst), q);
+                //@ open [?f]own_atomic_contents(dst)();
+                intrinsics::atomic_store::<u8, { AO::Relaxed }, false>(dst, val);
+                //@ close [f]own_atomic_contents(dst)();
+                //@ close_frac_borrow(f, own_atomic_contents(dst));
+            }
+            Release => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(dst), q);
+                //@ open [?f]own_atomic_contents(dst)();
+                intrinsics::atomic_store::<u8, { AO::Release }, false>(dst, val);
+                //@ close [f]own_atomic_contents(dst)();
+                //@ close_frac_borrow(f, own_atomic_contents(dst));
+            }
+            SeqCst => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(dst), q);
+                //@ open [?f]own_atomic_contents(dst)();
+                intrinsics::atomic_store::<u8, { AO::SeqCst }, false>(dst, val);
+                //@ close [f]own_atomic_contents(dst)();
+                //@ close_frac_borrow(f, own_atomic_contents(dst));
+            }
+            Acquire => panic!("there is no such thing as an acquire store"),
+            AcqRel => panic!("there is no such thing as an acquire-release store"),
+        }
+    }
+}
+
+// Keep the lifetime token available on any branch that can unwind.
+const unsafe fn atomic_load(src: *const u8, order: Ordering) -> u8
+//@ req thread_token(currentThread) &*& exists::<*AtomicBool>(?atomic) &*& exists::<lifetime_t>(?k) &*& [?q]lifetime_token(k) &*& [_]AtomicBool_share(k, currentThread, atomic) &*& src == ref_origin(atomic) as *const u8;
+//@ ens thread_token(currentThread) &*& [q]lifetime_token(k) &*& accepts_u8(result) == true;
+//@ on_unwind_ens thread_token(currentThread) &*& [q]lifetime_token(k);
+{
+    //@ open exists::<*AtomicBool>(atomic);
+    //@ open exists::<lifetime_t>(k);
+    unsafe {
+        match order {
+            Relaxed => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(src as *u8), q);
+                //@ open [?f]own_atomic_contents(src as *u8)();
+                let value = intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(src);
+                //@ close [f]own_atomic_contents(src as *u8)();
+                //@ close_frac_borrow(f, own_atomic_contents(src as *u8));
+                value
+            }
+            Acquire => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(src as *u8), q);
+                //@ open [?f]own_atomic_contents(src as *u8)();
+                let value = intrinsics::atomic_load::<u8, { AO::Acquire }, false>(src);
+                //@ close [f]own_atomic_contents(src as *u8)();
+                //@ close_frac_borrow(f, own_atomic_contents(src as *u8));
+                value
+            }
+            SeqCst => {
+                //@ open AtomicBool_share(k, currentThread, atomic);
+                //@ open_frac_borrow(k, own_atomic_contents(src as *u8), q);
+                //@ open [?f]own_atomic_contents(src as *u8)();
+                let value = intrinsics::atomic_load::<u8, { AO::SeqCst }, false>(src);
+                //@ close [f]own_atomic_contents(src as *u8)();
+                //@ close_frac_borrow(f, own_atomic_contents(src as *u8));
+                value
+            }
+            Release => panic!("there is no such thing as a release load"),
+            AcqRel => panic!("there is no such thing as an acquire-release load"),
+        }
+    }
+}
+
+//@ pred ordinary_reader(src: *u8; byte: u8) = [1/2](*src |-> byte);
+
+// Keep the ordinary reader's half separate while using the atomic half.
+// The caller supplies both read permissions for one initialized Boolean byte.
+unsafe fn mixed_reads(src: *mut u8) -> (u8, u8)
+//@ req atomic_mask(MaskTop) &*& ordinary_reader(src, ?byte) &*& [1/2](*src |-> byte) &*& accepts_u8(byte) == true;
+//@ ens atomic_mask(MaskTop) &*& [1/2](*src |-> byte) &*& std::intrinsics::atomic_points_to(src, 1/2, accepts_u8) &*& result.0 == byte &*& accepts_u8(result.1) == true;
+//@ on_unwind_ens false;
+{
+    //@ std::intrinsics::atomic_align_of_u8();
+    //@ div_rem(src as usize, 1);
+    //@ std::intrinsics::close_atomic_points_to_m(src, accepts_u8);
+    //@ open ordinary_reader(src, byte);
+    let ordinary = unsafe { *src };
+    let atomic = unsafe { intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(src as *const u8) };
+    (ordinary, atomic)
+}
+
+// Start from one owned byte and recover ownership after both reads.
+unsafe fn split_and_rejoin_reads(src: *mut u8) -> (u8, u8)
+//@ req atomic_mask(MaskTop) &*& *src |-> ?byte &*& accepts_u8(byte) == true;
+//@ ens atomic_mask(MaskTop) &*& *src |-> byte &*& result.0 == byte &*& accepts_u8(result.1) == true;
+//@ on_unwind_ens false;
+{
+    //@ close ordinary_reader(src, byte);
+    let values = unsafe { mixed_reads(src) };
+    //@ std::intrinsics::open_atomic_points_to(src);
+    values
+}
+
+// Convert a read fraction into a reference without granting a writable share.
+unsafe fn readonly_from_ptr<'a>(ptr: *mut bool) -> &'a AtomicBool
+//@ req atomic_mask(MaskTop) &*& [?q]lifetime_token('a) &*& std::intrinsics::atomic_points_to(ptr as *u8, 1/2, accepts_u8) &*& ref_origin(ptr) == ptr;
+//@ ens atomic_mask(MaskTop) &*& [q]lifetime_token('a) &*& std::intrinsics::atomic_points_to(ptr as *u8, 1/2, accepts_u8) &*& [_]frac_borrow('a, ref_initialized_(result)) &*& ref_origin(result) == ptr as *AtomicBool;
+//@ on_unwind_ens false;
+{
+    //@ let p = precreate_ref(ptr as *AtomicBool);
+    //@ open_ref_init_perm_AtomicBool(p);
+    //@ close_ref_initialized_AtomicBool(p, 1);
+    //@ close ref_initialized_::<AtomicBool>(p)();
+    //@ borrow_m('a, ref_initialized_(p));
+    //@ leak borrow_end_token('a, ref_initialized_(p));
+    //@ full_borrow_into_frac_m('a, ref_initialized_(p));
+    //@ open_frac_borrow('a, ref_initialized_(p), q);
+    //@ open [?f]ref_initialized_::<AtomicBool>(p)();
+    let result = unsafe { &*ptr.cast() };
+    //@ close [f]ref_initialized_::<AtomicBool>(p)();
+    //@ close_frac_borrow(f, ref_initialized_(p));
+    result
+}
+
+unsafe fn read_via_ref<'a>(atomic: &'a AtomicBool) -> bool
+//@ req [1/2]lifetime_token('a) &*& [_]frac_borrow('a, ref_initialized_(atomic)) &*& std::intrinsics::atomic_points_to(ref_origin(atomic) as *u8, 1/2, accepts_u8);
+//@ ens [1/2]lifetime_token('a) &*& std::intrinsics::atomic_points_to(ref_origin(atomic) as *u8, 1/2, accepts_u8);
+//@ on_unwind_ens false;
+{
+    // Read-only worker operation.
+    unsafe { intrinsics::atomic_load::<u8, { AO::Relaxed }, false>(atomic.v.get().cast::<u8>()) != 0 }
+}
+
+unsafe fn ordinary_via_ref<'a>(atomic: &'a AtomicBool) -> bool
+//@ req [1/2]lifetime_token('a) &*& [_]frac_borrow('a, ref_initialized_(atomic)) &*& ordinary_reader(ref_origin(atomic) as *u8, ?byte);
+//@ ens [1/2]lifetime_token('a) &*& ordinary_reader(ref_origin(atomic) as *u8, byte) &*& result == (byte != 0);
+//@ on_unwind_ens false;
+{
+    let ptr: *mut bool = atomic.v.get().cast();
+    //@ open ordinary_reader(ref_origin(atomic) as *u8, byte);
+    let result = unsafe { *ptr.cast::<u8>() != 0 };
+    //@ close ordinary_reader(ref_origin(atomic) as *u8, byte);
+    result
+}
+
+unsafe fn scoped_read_permissions(ptr: *mut bool) -> (bool, bool)
+//@ req atomic_mask(MaskTop) &*& *ptr |-> ?initial &*& ref_origin(ptr) == ptr;
+//@ ens atomic_mask(MaskTop) &*& *ptr |-> initial &*& result.0 == initial;
+//@ on_unwind_ens false;
+{
+    //@ points_to_bool_to_u8(ptr);
+    //@ let src = ptr as *u8;
+    //@ close ordinary_reader(src, if initial { 1 } else { 0 });
+    //@ std::intrinsics::atomic_align_of_u8();
+    //@ div_rem(src as usize, 1);
+    //@ std::intrinsics::close_atomic_points_to_m(src, accepts_u8);
+    //@ let k = begin_lifetime_m();
+    let values;
+    {
+        //@ let_lft 'scope = k;
+        let reference = unsafe { readonly_from_ptr/*@::<'scope>@*/(ptr) };
+        let ordinary = unsafe { ordinary_via_ref/*@::<'scope>@*/(reference) };
+        let atomic = unsafe { read_via_ref/*@::<'scope>@*/(reference) };
+        values = (ordinary, atomic);
+    }
+    //@ end_lifetime_m(k);
+    //@ std::intrinsics::open_atomic_points_to(src);
+    //@ open ordinary_reader(src, if initial { 1 } else { 0 });
+    //@ points_to_u8_to_bool(src);
+    values
+}
