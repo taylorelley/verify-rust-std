@@ -157,6 +157,7 @@ def main():
                 ))
                 if actual_orders != expected_orders or original[op].count("tail call void") != 2:
                     raise SystemExit(f"Missing pointer-typed {op} ordering or panic branch for size {size}")
+            (case_logs / "verified.rs").write_text(generated)
             verify(generated, f"proof-{size}")
             verified_sizes.append(size)
 

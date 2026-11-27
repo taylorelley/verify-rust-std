@@ -8,6 +8,7 @@ on:
     paths:
       - 'library/core/**'
       - 'rust-toolchain.toml'
+      - 'doc/src/challenges/0007-atomic-types.md'
       - 'verifast-proofs/core/sync/atomic.rs/**'
       - '.github/workflows/verifast-challenge-7.yml'
   push:
@@ -18,6 +19,7 @@ on:
     paths:
       - 'library/core/**'
       - 'rust-toolchain.toml'
+      - 'doc/src/challenges/0007-atomic-types.md'
       - 'verifast-proofs/core/sync/atomic.rs/**'
       - '.github/workflows/verifast-challenge-7.yml'
 

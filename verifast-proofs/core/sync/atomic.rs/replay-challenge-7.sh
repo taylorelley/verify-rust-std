@@ -26,12 +26,18 @@ rustc_path=$(rustup which --toolchain "$source_nightly" rustc)
 {
     "$rustc_path" -vV
     rustc "+$verifier_nightly" -vV
-    sha256sum "$proof_dir/verifast-26.10-u8-store.patch"
+    repo=$(cd "$proof_dir/../../../.." && pwd)
+    if git -C "$repo" rev-parse --verify HEAD >/dev/null 2>&1; then
+        git -C "$repo" log -1 --format='Checkout %H'
+    fi
+    (cd "$repo" && sha256sum library/core/src/sync/atomic.rs library/core/src/intrinsics/mod.rs \
+        verifast-proofs/core/sync/atomic.rs/verifast-26.10-u8-store.patch)
 } > "$logs/toolchains-and-patch.txt"
 
 run build bash "$proof_dir/build-store-verifast.sh" "$work/verifast" "$@"
 runtime="$work/verifast/verifast-26.10/bin"
-export LD_LIBRARY_PATH="$runtime:$work/verifast/vfdeps-adf88dc${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cp -- "$runtime/rust/std/lib.rsspec" "$logs/lib.rsspec"
+export LD_LIBRARY_PATH="$runtime:$work/verifast/vfdeps-adf88dc/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 run bool-clients python3 "$proof_dir/check-bool-clients.py" "$rustc_path"
 prove() {

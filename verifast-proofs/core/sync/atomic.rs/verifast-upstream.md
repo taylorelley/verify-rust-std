@@ -1,8 +1,8 @@
 # Upstreaming the VeriFast patch
 
 The proofs need `verifast-26.10-u8-store.patch` on top of VeriFast 26.10
-(commit `f76012fb`). The patch also applies cleanly to the current VeriFast
-master. When a VeriFast release includes these changes, this directory can
+(commit `f76012fb`). The patch also applied cleanly to VeriFast master at
+`0a83dba42db7ce0b445034ece5298afe980e57dc`. When a VeriFast release includes these changes, this directory can
 switch to the repository's standard setup: set `VFVERSION` in
 `verifast-proofs/setup-verifast-home`, then delete `build-store-verifast.sh`
 and the patch.
@@ -59,7 +59,8 @@ on these calls. That blocks `core::sync::atomic` and every client of it.
 
 ### Testing
 
-The `verify-rust-std` Challenge 7 replay exercises every path. It checks the
-constructors and public methods of each atomic type, the generic helpers,
-and negative controls for each rejected shape and ordering. The upstream
+The `verify-rust-std` Challenge 7 replay checks the required constructors,
+the extracted ordinary helpers and all 91 intrinsic ordering variants. The
+public-wrapper matrix and rejection controls exercise operand types, illegal
+orderings, storage permissions and target-specific load constraints. The upstream
 VeriFast test suite should also run with the patch applied before it merges.

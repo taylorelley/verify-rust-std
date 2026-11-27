@@ -2,16 +2,17 @@
 
 This directory verifies the safety of `core::sync::atomic` for
 [Challenge 7](../../../../doc/src/challenges/0007-atomic-types.md) with
-VeriFast. The proofs run on the fork's `library/core/src/sync/atomic.rs`
-for Linux x86-64, and for AArch64 Linux in the 128-bit cases.
+VeriFast. It covers Linux x86-64, with the 128-bit cases on AArch64 Linux.
+Start with the [committee review guide](review-guide.md) to trace a constructor,
+a helper call and a rejected overlapping access through the CI artifact.
 
 ## What is proved
 
 | Challenge 7 item | Proof step | Evidence |
 | --- | --- | --- |
 | Part 1: the 12 `from_ptr` constructors | `constructors` | Each constructor needs a live, initialized slot with the atomic alignment of its type, and holds it for the reference lifetime. All slot values are symbolic. `AtomicPtr` uses pointee sizes 0, 1, 2, 3 and 4 with an unrestricted pointer value. |
-| Part 2: the named unsafe helpers (15 covered) `atomic_store` to `atomic_umin` | `generic-helpers` | The helper bodies are extracted from the library at replay time. Load and store specialize the access flag to ordinary access. Each helper has a verified contract. |
-| Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The public wrappers unwind on invalid orderings with every resource intact. |
+| Part 2: all 14 named unsafe helpers, plus `atomic_min` | `generic-helpers` | The helper bodies are extracted from the library at replay time. Load and store specialize the access flag to ordinary access. Each helper has a verified contract. |
+| Part 2 (optional): panic contracts | `generic-helpers` and the per-type wrapper proofs | Once the ordering contract excludes the invalid orderings, the helpers cannot unwind. The covered wrapper contracts preserve their specified resources on unwind. |
 | Part 3: intrinsic contracts | `verifast-26.10-u8-store.patch` (`bin/rust/std/lib.rsspec`) | 91 ordering variants across load, store, exchange, both compare-exchange forms, add, sub, and, nand, or, xor, max, min, umax and umin. |
 | Additional public-wrapper evidence | `bool-access`, `u16-mixed-width`, `integer-access`, `exchange`, `compare-exchange`, `arithmetic`, `bitwise`, `extrema` | The direct ordinary operation wrappers covered by the replay matrix, including integer widths and five pointer pointee sizes. The matrix records the supported methods. Callback-based updates and indirect convenience wrappers have no dedicated proof here. |
 
@@ -38,12 +39,12 @@ from the earlier VeriFast submission by jellllly420. [PR #675](https://github.co
 
 ## Trusted base
 
-1. The intrinsic contracts and atomic permission lemmas in the VeriFast patch.
-   They are the specifications of compiler primitives, so they cannot be proved
-   in Rust.
+1. The installed VeriFast `lib.rsspec` supplies the atomic permission lemmas
+   and primitive contracts. The patch extends the stock 26.10 specifications.
+   The proof assumes the contracts correctly describe the compiler primitives.
 2. The patched VeriFast frontend, which decodes const-generic `AtomicOrdering`
    arguments and exports ABI alignment for concrete structs. The patch applies
-   to VeriFast 26.10 and to the current master. Once a VeriFast release includes
+   to VeriFast 26.10. Once a VeriFast release includes
    it, the repository's pinned release can replace it. See
    [`verifast-upstream.md`](verifast-upstream.md).
 3. The constructor proof replaces the associated storage projection with a
@@ -59,9 +60,6 @@ from the earlier VeriFast submission by jellllly420. [PR #675](https://github.co
    for the supported public methods. Those comparisons rely on the
    documented source correspondence when interpreting Rust-level behaviors
    such as provenance and borrows.
-
-[`review-guide.md`](review-guide.md) maps each claim to its evidence and lists
-the checks a reviewer should repeat.
 
 ## Full replay in CI
 
@@ -96,9 +94,9 @@ leaves the logs in place.
 
 The proofs are not tied to a hash of the atomic module. Each step either
 copies the library code directly or compares compiled library code with the
-verified copy. A toolchain update therefore fails only if it changes
-verified behavior. Intrinsic declarations remain pinned by excerpt, so any
-change to them forces a review of the trusted contracts.
+verified copy. Changes in source formatting, MIR, LLVM output or diagnostics can also
+require a replay-script update. The runners pin selected intrinsic declaration
+excerpts to flag changes for review.
 
 The main replay runs the threaded clients under native Rust and Miri.
 [The supplementary scoped-thread analysis](supplementary-scoped-threads.md)
@@ -122,7 +120,7 @@ operand of arithmetic and bitwise operations):
 | Helper | Requires | Ensures |
 | --- | --- | --- |
 | `atomic_load` | writable backing `[f]atomic_points_to(dst, 1, valid)` | the same fraction, and `valid(result)` |
-| `atomic_store` | write permission `atomic_points_to(dst, 1, valid)` and `valid(val)` | the permission |
+| `atomic_store` | atomic share `[f]atomic_points_to(dst, 1, valid)` and `valid(val)` | the permission |
 | `atomic_swap`, `atomic_max`, `atomic_min`, `atomic_umax`, `atomic_umin` | write permission and `valid(val)` | the permission and `valid(result)` |
 | `atomic_compare_exchange`, `atomic_compare_exchange_weak` | write permission, `valid(old)` and `valid(new)` | the permission and a valid value in `Ok` or `Err` |
 | `atomic_add`, `atomic_sub`, `atomic_and`, `atomic_nand`, `atomic_or`, `atomic_xor` | write permission to a slot that admits every value | the permission |
@@ -324,8 +322,9 @@ client exercises null, dangling, address-only and live pointer values
 without dereferencing them.
 
 The proof also covers ordinary pointer loads and stores on Linux x86-64
-for the same five pointee sizes. The load borrows a read fraction and the
-store requires full permission in the trusted primitive contracts. The patched
+for the same five pointee sizes. A Relaxed load can use a fraction of the
+underlying byte permission. Acquire and SeqCst loads and all stores require
+full underlying byte permission. The patched
 verifier accepts compiler-confirmed concrete thin raw pointers and rejects
 wide pointers and volatile accesses.
 

@@ -101,6 +101,7 @@ def main():
             (logs / (name + ".log")).write_text(output)
             return result.returncode, output
 
+        (logs / "verified.rs").write_text(proof_text)
         status, output = verify("constructor", proof_text)
         if status or not all(fragment in output for fragment in (
             "0 errors found", "target: x86_64-unknown-linux-gnu", "Verifying function 'AtomicBool::from_ptr'",

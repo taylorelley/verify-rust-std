@@ -1,9 +1,42 @@
 # Challenge 7 proof review
 
-Review the pinned Rust source, the generated proof specializations and the
-patched verifier together. The replay checks the Rust source and intrinsic
-definitions, rebuilds the verifier from checksum-pinned archives and saves
-proof logs, compiler IR, negative controls and runtime test results.
+Open the **VeriFast Challenge 7** check on the submission PR and download
+`challenge-7-evidence`. For an independent run, use the two toolchain installs
+and the replay command in the [README](README.md#full-replay-in-ci).
+The paths below are relative to the extracted artifact or the local
+`evidence/` directory.
+
+1. **Identify the run.** `toolchains-and-patch.txt` records the checkout,
+   both rustc versions and the hashes of the atomic source, intrinsic declarations
+   and VeriFast patch. GitHub may check out the PR's test merge commit.
+   `build.log` records the verifier build. The replay writes `result.log`
+   only after all proof steps, rejection controls, native clients and Miri runs pass.
+2. **Part 1 — follow one constructor end to end.** In `constructors/coverage.json`,
+   find `AtomicU128` on AArch64. Open `constructors/u128/verified.rs` for the
+   entry contract, reference creation and storage recovery. Compare the
+   `from_ptr` bodies in `original-constructor.mir` and `specialized-constructor.mir`
+   in that directory. In `proof.log`, look for `Verifying function 'AtomicU128::from_ptr'`
+   and `0 errors found`. In `live-recovery.log`, look for the missing
+   `lifetime_dead_token`: the attempted early recovery has to fail.
+   For an arbitrary stored pointer to a three-byte pointee, inspect
+   `constructors/ptr/constructor-3/verified.rs` and `constructors/ptr/proof-3.log`.
+3. **Parts 2 and 3 — follow one call.** In `generic-helpers/coverage.json`,
+   look up `atomic_store_relaxed` under `intrinsic_lines_in_generic_helpers_rs`.
+   The listed line in `generic-helpers/generic-helpers.rs` calls the modern
+   const-generic intrinsic inside the extracted `atomic_store` helper. The
+   positive VeriFast trace in `generic-helpers/generic-helpers.log` records
+   `Verifying call` at that source span. Open `lib.rsspec` for the installed
+   `atomic_store_relaxed` contract, then `generic-helpers/store-read-fraction.log`
+   for the rejection when the underlying byte permission is halved. The
+   replay cross-checks visited calls against every ordering variant in the
+   challenge table. The 14 named helpers appear under `required_helpers`.
+   The suite also verifies `atomic_min`, whose intrinsic is listed in Part 3.
+4. **Inspect the data-race argument.** `u16-mixed-width/proof.log` verifies
+   accesses to disjoint storage. `overlap-first-byte.log` and
+   `overlap-second-byte.log` in the same directory give the expected
+   permission failures for overlapping accesses. The trusted rule connecting
+   these failures to Rust memory is described below. Native and Miri logs
+   provide separate observations of the threaded clients.
 
 ## Evidence for the required safety properties
 
@@ -26,7 +59,7 @@ scope on these targets.
 
 1. **Atomic permissions.** Review the abstract `atomic_points_to` predicate,
    `close_atomic_points_to_m`, `open_atomic_points_to` and the alignment lemmas
-   in the VeriFast patch. The key obligation is that an atomic permission
+   in the installed `lib.rsspec`. Some of these rules come from stock VeriFast 26.10. An atomic permission
    accounts for the same initialized bytes as the original points-to resource.
    Check how the underlying byte fraction differs from the fraction on a
    shared atomic assertion, and how each is restored. Review the compiler
@@ -79,8 +112,12 @@ scope on these targets.
    The atomic model treats stored pointer values as opaque and abstracts
    from synchronization behavior.
 
-## Review status
+## Decisions for the committee
 
-The replay is automated and reproducible from the pinned inputs. The
-committee review should focus on the trusted contracts (item 2), the frontend
-patch, and the specialization comparisons for the public wrappers (item 3).
+The submission relies on the patched VeriFast frontend and primitive
+contracts. Its load and store claims cover ordinary accesses
+(`VOLATILE=false`). The constructor argument specializes the associated
+storage type because the frontend cannot translate the original generic
+projection. The source cast, storage type, layout and MIR checks above
+are the evidence for that substitution. These are the material assumptions
+to assess when deciding whether the proof satisfies the challenge.

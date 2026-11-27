@@ -117,6 +117,37 @@ def proof_text(source, contracts):
     return "".join(parts)
 
 
+def challenge_coverage(challenge, proof, trace):
+    """Match the book's intrinsic names to calls visited in the positive proof."""
+    part2 = challenge.split("#### Part 2:", 1)[1].split("##### Panicking", 1)[0]
+    required = re.findall(r"^- `(atomic_\w+)`$", part2, re.M)
+    part3 = challenge.split("#### Part 3:", 1)[1].split("## List of UBs", 1)[0]
+    variants = set(re.findall(r"`(atomic_\w+)`", part3))
+    if not required or not variants:
+        raise SystemExit("Could not read the mandatory Challenge 7 helper list or intrinsic table")
+    missing = set(required) - set(HELPERS)
+    if missing:
+        raise SystemExit(f"Missing required helper proofs: {sorted(missing)}")
+
+    # VeriFast reports one-based, end-exclusive source spans for calls it visits.
+    # Read only spans in the positive generated crate, excluding verifier-library calls.
+    lines = proof.read_text().splitlines()
+    spans = rf"{re.escape(str(proof))}\((\d+),(\d+)-(\d+)\): Verifying call$"
+    visited = {}
+    for line, start, end in re.findall(spans, trace, re.M):
+        call = lines[int(line) - 1][int(start) - 1:int(end) - 1]
+        intrinsic = re.match(r"intrinsics::(atomic_\w+)::<([^>]+)>\(", call)
+        if intrinsic:
+            orders = re.findall(r"AO::(\w+)", intrinsic[2])
+            variant = "_".join([intrinsic[1], *(order.lower() for order in orders)])
+            visited.setdefault(variant, set()).add(int(line))
+    if visited.keys() != variants:
+        raise SystemExit(f"Part 3 intrinsic coverage differs from the challenge table. "
+                         f"Missing {sorted(variants - visited.keys())}, "
+                         f"unexpected {sorted(visited.keys() - variants)}")
+    return required, {name: sorted(visited[name]) for name in sorted(visited)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("verifast_bin", type=Path)
@@ -177,6 +208,11 @@ def main():
         if result.returncode == 0 or "error[E0511]: invalid monomorphization" not in result.stderr:
             raise SystemExit(f"Rustc did not reject the expected operand shape in {probe.name}")
     expect_pass("generic-helpers", proof)
+    challenge = here.parents[3] / "doc/src/challenges/0007-atomic-types.md"
+    required, intrinsic_calls = challenge_coverage(
+        challenge.read_text(), logs / "generic-helpers.rs", (logs / "generic-helpers.log").read_text(),
+    )
+    print(f"Matched {len(required)} required helpers and {len(intrinsic_calls)} intrinsic ordering variants.")
     print(f"Verified the {len(HELPERS)} generic helpers copied from the atomic module.")
 
     strict = dict(CONTRACTS)
@@ -252,7 +288,9 @@ def main():
         expect_fail(name, text, diagnostic)
         results[name] = "rejected"
     (logs / "coverage.json").write_text(json.dumps({
-        "helpers": list(HELPERS), "no_panic_contracts": list(NO_PANIC), "controls": results,
+        "helpers": list(HELPERS), "required_helpers": required,
+        "intrinsic_lines_in_generic_helpers_rs": intrinsic_calls,
+        "no_panic_contracts": list(NO_PANIC), "controls": results,
     }, indent=2) + "\n")
     print(f"All {len(controls)} generic-helper rejection controls passed.")
 

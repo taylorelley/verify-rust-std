@@ -156,6 +156,7 @@ def main():
                 if not passed:
                     raise SystemExit(f"{name} {label} failed. See {case_logs / (label + '.log')}")
 
+            (case_logs / "verified.rs").write_text(source)
             verify("proof", source)
             verify("uninitialized", replace(source, " &*& *ptr |-> ?value &*& ptr as usize",
                                             " &*& ptr as usize"), f"No matching heap chunks: points_to<{operand}>")
