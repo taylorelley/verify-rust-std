@@ -1,0 +1,270 @@
+diff --git a/src/frontend/ast.ml b/src/frontend/ast.ml
+index e55645c..942466f 100644
+--- a/src/frontend/ast.ml
++++ b/src/frontend/ast.ml
+@@ -1119,7 +1119,8 @@ and
+ and
+   struct_attr =
+   | Packed
+-  | ReprC
++  | ReprC | RustcAbiAlignment of int
++  | RustcInstanceAlignment of string list (* quantified type parameters *) * type_expr list (* struct type arguments *) * int
+ and constant_value = (* ?constant_value *)
+   IntConst of big_int
+ | BoolConst of bool
+diff --git a/src/frontend/ocaml_expr_of_ast.ml b/src/frontend/ocaml_expr_of_ast.ml
+index 959ce64..c53c6da 100644
+--- a/src/frontend/ocaml_expr_of_ast.ml
++++ b/src/frontend/ocaml_expr_of_ast.ml
+@@ -1170,6 +1170,8 @@ and of_ctor = function
+ and of_struct_attr = function
+   Packed -> c "Packed"
+ | ReprC -> c "ReprC"
++| RustcAbiAlignment n -> C ("RustcAbiAlignment", [I n])
++| RustcInstanceAlignment (xs, targs, n) -> C ("RustcInstanceAlignment", [of_list (fun x -> S x) xs; of_list of_type_expr targs; I n])
+ and of_constant_value = function
+   IntConst n -> C ("IntConst", [BigInt n])
+ | BoolConst b -> C ("BoolConst", [B b])
+diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
+index 1ef7733..479346e 100644
+--- a/src/rust_frontend/vf_mir/vf_mir.capnp
++++ b/src/rust_frontend/vf_mir/vf_mir.capnp
+@@ -279,6 +279,17 @@ struct AdtDef {
+     clauses @7: List(Clause);
+     implementsDrop @8: Bool;
+     isReprC @11: Bool;
++    knownAlignment @12: UInt64; # Zero if unavailable or generic.
++    struct InstanceAlignment {
++        # The ABI alignment that rustc computes for this ADT applied to genericArgs,
++        # in the typing environment of a local function whose signature mentions
++        # the instance. typeParams lists the function's type parameters occurring
++        # in genericArgs; the layout was computed without knowing them.
++        genericArgs @0: List(GenericArg);
++        typeParams @1: List(Text);
++        alignment @2: UInt64;
++    }
++    instanceAlignments @13: List(InstanceAlignment);
+ }
+ 
+ enum AliasTyKind {
+diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+index fa944cc..3823e81 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+@@ -1142,6 +1142,74 @@ use rustc_span::RemapPathScopeComponents;
+             });
+             adt_def_cpn.set_implements_drop(adt_def.has_dtor(tcx));
+             adt_def_cpn.set_is_repr_c(adt_def.repr().c());
++            if is_local && adt_def.is_struct() && tcx.generics_of(adt_def.did()).count() == 0 {
++                let adt_ty = tcx.type_of(adt_def.did()).instantiate_identity().skip_normalization();
++                let env = ty::TypingEnv::fully_monomorphized();
++                if let Ok(layout) = tcx.layout_of(env.as_query_input(adt_ty)) {
++                    adt_def_cpn.set_known_alignment(layout.align.abi.bytes());
++                }
++            }
++            if is_local && adt_def.is_struct() {
++                let instances = Self::instance_alignments(tcx, adt_def.did());
++                let mut instances_cpn =
++                    adt_def_cpn.reborrow().init_instance_alignments(instances.len());
++                for (i, (args, type_params, alignment)) in instances.into_iter().enumerate() {
++                    let mut instance_cpn = instances_cpn.reborrow().get(i);
++                    instance_cpn.fill_generic_args(args.iter(), |arg_cpn, arg| {
++                        Self::encode_gen_arg(tcx, enc_ctx, arg, arg_cpn);
++                    });
++                    instance_cpn.fill_type_params(type_params.iter().map(|x| x.as_str()));
++                    instance_cpn.set_alignment(alignment);
++                }
++            }
++        }
++
++        /// Collects the instances of a local struct that occur in the signatures of local
++        /// functions, with the ABI alignment rustc computes for each in the function's
++        /// typing environment. An instance is skipped if its layout depends on the
++        /// function's generic parameters, if it has lifetime or const arguments, or if
++        /// its arguments mention projections, which may have no VeriFast typeid.
++        fn instance_alignments(
++            tcx: TyCtxt<'tcx>,
++            adt_did: rustc_span::def_id::DefId,
++        ) -> Vec<(ty::GenericArgsRef<'tcx>, Vec<String>, u64)> {
++            use rustc_middle::ty::TypeVisitableExt;
++            let mut instances: Vec<(ty::GenericArgsRef<'tcx>, Vec<String>, u64)> = Vec::new();
++            for fn_did in tcx.hir_body_owners() {
++                let fn_did = fn_did.to_def_id();
++                if !matches!(tcx.def_kind(fn_did), hir::def::DefKind::Fn | hir::def::DefKind::AssocFn) {
++                    continue;
++                }
++                let sig = tcx.fn_sig(fn_did).instantiate_identity().skip_normalization().skip_binder();
++                let env = ty::TypingEnv::post_analysis(tcx, fn_did);
++                for sig_ty in sig.inputs_and_output.iter() {
++                    for arg in sig_ty.walk() {
++                        let Some(ty) = arg.as_type() else { continue };
++                        let ty::Adt(def, args) = ty.kind() else { continue };
++                        if def.did() != adt_did || ty.has_free_regions() || ty.has_escaping_bound_vars()
++                            || ty.has_aliases()
++                            || args.iter().any(|a| a.as_type().is_none())
++                            || instances.iter().any(|(a, _, _)| *a == *args)
++                        {
++                            continue;
++                        }
++                        let Ok(layout) = tcx.layout_of(env.as_query_input(ty)) else { continue };
++                        let mut type_params: Vec<String> = Vec::new();
++                        for inner in ty.walk() {
++                            if let Some(inner_ty) = inner.as_type() {
++                                if let ty::Param(param) = inner_ty.kind() {
++                                    let name = param.name.to_string();
++                                    if !type_params.contains(&name) {
++                                        type_params.push(name);
++                                    }
++                                }
++                            }
++                        }
++                        instances.push((args, type_params, layout.align.abi.bytes()));
++                    }
++                }
++            }
++            instances
+         }
+ 
+         fn encode_adt_kind(adt_kind: ty::AdtKind, mut adt_kind_cpn: adt_kind_cpn::Builder<'_>) {
+diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+index ce44612..43d7f3d 100644
+--- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
++++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+@@ -6319,6 +6319,28 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+             let [ variant_def_no_zst ] = variants_no_zst in
+             let fds_no_zst = variant_def_no_zst.fields in
+             let field_defs_no_zst = List.map translate_to_vf_field_def fds_no_zst in
++            (* Alignments of instances such as Atomic<i16>, computed by rustc. *)
++            (* An instance whose type arguments VeriFast cannot represent, such as
++               Box<str>, gets no fact. *)
++            let instance_alignments =
++              instance_alignments_get_list adt_def_cpn
++              |> List.filter_map @@ fun instance_cpn ->
++                 let open AdtDefRd.InstanceAlignment in
++                 let alignment = alignment_get instance_cpn in
++                 if alignment = Stdint.Uint64.zero || alignment > Stdint.Uint64.of_int (1 lsl 29) then
++                   Ast.static_error def_loc "Invalid compiler-exported instance alignment" None;
++                 let translate arg_cpn =
++                   match translate_generic_arg (D.decode_generic_arg arg_cpn) def_loc with
++                   | Ok (Mir.GenArgType ty_info) -> Some ty_info.vf_ty
++                   | _ -> None
++                   | exception Ast.StaticError _ -> None
++                 in
++                 let targs = List.map translate (generic_args_get_list instance_cpn) in
++                 if List.mem None targs then None
++                 else
++                   Some (Ast.RustcInstanceAlignment (type_params_get_list instance_cpn,
++                     List.map Option.get targs, Stdint.Uint64.to_int alignment))
++            in
+             let struct_decl =
+               Ast.Struct
+                 ( def_loc,
+@@ -6330,7 +6352,17 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+                       (*instance_pred_decl list*) [],
+                       (*is polymorphic*) false ),
+                   (*struct_attr list*)
+-                  if is_repr_c_get adt_def_cpn then [ ReprC ] else [] )
++                  let repr = if is_repr_c_get adt_def_cpn then [ Ast.ReprC ] else [] in
++                  let alignment = known_alignment_get adt_def_cpn in
++                  let attrs =
++                    if alignment = Stdint.Uint64.zero then repr
++                    else begin
++                      if vf_tparams <> [] || alignment > Stdint.Uint64.of_int (1 lsl 29) then
++                        Ast.static_error def_loc "Invalid compiler-exported concrete ABI alignment" None;
++                      Ast.RustcAbiAlignment (Stdint.Uint64.to_int alignment) :: repr
++                    end
++                  in
++                  attrs @ instance_alignments )
+             in
+             let struct_typedef_aux =
+               Ast.TypedefDecl
+diff --git a/src/verifast1.ml b/src/verifast1.ml
+index 920e317..e5f699e 100644
+--- a/src/verifast1.ml
++++ b/src/verifast1.ml
+@@ -6528,6 +6528,33 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+         ctxt#assume_forall name [trigger] (List.map (fun x -> ctxt#type_inductive) tparams) fact
+       end
+     in
++    List.iter (function
++      | RustcAbiAlignment n ->
++        if dialect <> Some Rust || tparams <> [] || n <= 0 || n land (n - 1) <> 0 then
++          static_error l "Invalid compiler-exported concrete ABI alignment" None;
++        let type_info = ctxt#mk_app type_info_func [] in
++        ctxt#assert_term (ctxt#mk_eq (mk_alignof type_info) (ctxt#mk_intlit n))
++      | RustcInstanceAlignment (qtparams, targ_tes, n) ->
++        (* The alignment rustc computed for this instance. If the instance mentions
++           type parameters, rustc computed it without knowing them. *)
++        if dialect <> Some Rust || n <= 0 || n land (n - 1) <> 0 || List.length targ_tes <> List.length tparams then
++          static_error l "Invalid compiler-exported instance alignment" None;
++        (* An instance mentioning a type that VeriFast does not know gets no fact. *)
++        begin match List.map (check_pure_type ("", []) qtparams Ghost) targ_tes with
++          exception StaticError _ -> ()
++        | targs ->
++        if qtparams = [] then
++          ctxt#assert_term (ctxt#mk_eq (mk_alignof (ctxt#mk_app type_info_func (List.map (typeid_of_core l []) targs))) (ctxt#mk_intlit n))
++        else begin
++          ctxt#begin_formal;
++          let env = List.mapi (fun i x -> (tparam_typeid_varname x, ctxt#mk_bound i ctxt#type_inductive)) qtparams in
++          let a = mk_alignof (ctxt#mk_app type_info_func (List.map (typeid_of_core l env) targs)) in
++          let fact = ctxt#mk_eq a (ctxt#mk_intlit n) in
++          ctxt#end_formal;
++          ctxt#assume_forall (sn ^ "_instance_alignment") [a] (List.map (fun _ -> ctxt#type_inductive) qtparams) fact
++        end
++        end
++      | _ -> ()) attrs;
+     let packed = List.mem Packed attrs in
+     let repr_c = dialect <> Some Rust || List.mem ReprC attrs in
+     assume_axiom (fun _ _ s -> (sn ^ "_size_limits", s, ctxt#mk_and (ctxt#mk_lt (ctxt#mk_intlit 0) s) (ctxt#mk_le s max_uintptr_term)));
+diff --git a/tests/rust/instance_alignment.rs b/tests/rust/instance_alignment.rs
+new file mode 100644
+index 0000000..128e428
+--- /dev/null
++++ b/tests/rust/instance_alignment.rs
+@@ -0,0 +1,34 @@
++// Rustc's alignment for instances of a generic struct that appear in local
++// function signatures.
++#[repr(C, align(2))]
++pub struct Align2<T>(T);
++
++#[repr(C)]
++pub struct Wrap<T> {
++    x: T,
++}
++
++pub fn concrete(_p: *mut Align2<u8>, _q: *mut Wrap<u64>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Align2<u8> >() == 2;
++    //@ assert std::mem::align_of::<Wrap<u64> >() == 8;
++}
++
++// The layout of Wrap<*mut T> does not depend on T: Sized.
++pub fn generic<T>(_p: *mut Wrap<*mut T>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Wrap<*mut T> >() == std::mem::size_of::<usize>();
++}
++
++pub fn not_exported(_p: *mut Wrap<u32>)
++//@ req true;
++//@ ens true;
++{
++    //@ assert std::mem::align_of::<Wrap<u16> >() == 2; //~should_fail
++}
++
++fn main() {}
+diff --git a/tests/rust/testsuite.mysh b/tests/rust/testsuite.mysh
+index 61fc95d..5a5b840 100644
+--- a/tests/rust/testsuite.mysh
++++ b/tests/rust/testsuite.mysh
+@@ -20,6 +20,7 @@ verifast use_decls_in_modules.rs
+ verifast -skip_specless_fns assoc_type_projection.rs
+ verifast -allow_should_fail -allow_assume -allow_dead_code pred_ctor_generic_args.rs
+ verifast -allow_should_fail macro_fn_specs.rs
++verifast -allow_should_fail -allow_dead_code instance_alignment.rs
+ verifast -allow_should_fail self_in_ghost.rs
+ verifast -allow_should_fail -allow_dead_code pred_ctor_infer_targs.rs
+ begin_sequential

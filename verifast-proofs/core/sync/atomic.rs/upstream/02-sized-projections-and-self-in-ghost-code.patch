@@ -1,0 +1,401 @@
+diff --git a/src/refinement_checker/refinement_checker.ml b/src/refinement_checker/refinement_checker.ml
+index 77c3c28..ecbe8e3 100644
+--- a/src/refinement_checker/refinement_checker.ml
++++ b/src/refinement_checker/refinement_checker.ml
+@@ -619,6 +619,8 @@ let fns_to_be_inlined: (string * body) list =
+       clauses=[];
+       is_trait_fn=false;
+       is_drop_fn=false;
++      is_inherent_impl_fn=false;
++      inherent_impl_self_ty={kind=Tuple []};
+       visibility=Public;
+     }
+   );
+@@ -716,6 +718,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   }
+   );
+@@ -955,6 +959,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   });
+   ("std::result::Result::<T, E>::map_err",
+@@ -1193,6 +1199,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   });
+   ("std::option::Option::<T>::map",
+@@ -1409,6 +1417,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   });
+   "std::option::Option::<T>::unwrap_or_else",
+@@ -1589,6 +1599,8 @@ let fns_to_be_inlined: (string * body) list =
+     clauses=[];
+     is_trait_fn=false;
+     is_drop_fn=false;
++    is_inherent_impl_fn=false;
++    inherent_impl_self_ty={kind=Tuple []};
+     visibility=Public;
+   }
+ ]
+diff --git a/src/rust_frontend/vf_mir/vf_mir.capnp b/src/rust_frontend/vf_mir/vf_mir.capnp
+index 9e81d09..460b952 100644
+--- a/src/rust_frontend/vf_mir/vf_mir.capnp
++++ b/src/rust_frontend/vf_mir/vf_mir.capnp
+@@ -872,6 +872,8 @@ struct Body {
+     isTraitFn @12: Bool;
+     isDropFn @13: Bool; # Implements std::ops::Drop::drop
+     visibility @22: Visibility;
++    isInherentImplFn @26: Bool; # Defined in an inherent impl block
++    inherentImplSelfTy @27: Ty; # The impl block's self type, if isInherentImplFn
+ }
+ 
+ struct Trait {
+@@ -888,6 +890,9 @@ struct Trait {
+ 
+     name @0: Text;
+     requiredFns @1: IndList(RequiredFn);
++    # Associated types with a Sized bound and no generics of their own.
++    # Empty if the trait has generic parameters other than Self.
++    sizedAssocTypes @2: List(Text);
+ }
+ 
+ struct TyAlias {
+diff --git a/src/rust_frontend/vf_mir_exporter/src/lib.rs b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+index 515b952..0460fca 100644
+--- a/src/rust_frontend/vf_mir_exporter/src/lib.rs
++++ b/src/rust_frontend/vf_mir_exporter/src/lib.rs
+@@ -786,6 +786,36 @@ use rustc_span::RemapPathScopeComponents;
+                 let mut trait_cpn = traits_cons_cpn.reborrow().init_h();
+                 let name = self.tcx.def_path_str(trait_def_id);
+                 trait_cpn.set_name(&name);
++                // VeriFast names the typeid of <T as Trait>::Assoc after the trait and the
++                // associated type. Export those that are known to be Sized.
++                let sized_trait = self.tcx.lang_items().sized_trait();
++                let sized_assoc_types: Vec<String> =
++                    if self.tcx.generics_of(trait_def_id).count() != 1 {
++                        Vec::new()
++                    } else {
++                        self.tcx
++                            .associated_items(trait_def_id)
++                            .in_definition_order()
++                            .filter(|item| {
++                                item.kind.as_def_kind() == rustc_hir::def::DefKind::AssocTy
++                                    && self.tcx.generics_of(item.def_id).own_params.is_empty()
++                                    && self.tcx.item_bounds(item.def_id).skip_binder().iter().any(
++                                        |clause| match clause.as_trait_clause() {
++                                            Some(trait_clause) => {
++                                                Some(trait_clause.def_id()) == sized_trait
++                                            }
++                                            None => false,
++                                        },
++                                    )
++                            })
++                            .map(|item| item.name().to_string())
++                            .collect()
++                    };
++                let mut sized_assoc_types_cpn =
++                    trait_cpn.reborrow().init_sized_assoc_types(sized_assoc_types.len());
++                for (i, assoc_type) in sized_assoc_types.iter().enumerate() {
++                    sized_assoc_types_cpn.set(i, assoc_type);
++                }
+                 let mut required_fns_cpn = trait_cpn.reborrow().init_required_fns();
+                 for item in self
+                     .tcx
+@@ -1339,6 +1369,12 @@ use rustc_span::RemapPathScopeComponents;
+                         Self::encode_generic_param_def(generic_param, generic_param_cpn);
+                     },
+                 );
++                // Lets ghost code in inherent impls refer to the impl's self type as Self.
++                if tcx.impl_opt_trait_id(impl_did).is_none() {
++                    body_cpn.set_is_inherent_impl_fn(true);
++                    let self_ty = tcx.type_of(impl_did).instantiate_identity().skip_normalization();
++                    Self::encode_ty(tcx, enc_ctx, self_ty, body_cpn.reborrow().init_inherent_impl_self_ty());
++                }
+ 
+                 let impl_clauses = tcx.clauses_of(impl_did).clauses;
+                 body_cpn.fill_impl_block_clauses(impl_clauses, |clause_cpn, clause| {
+diff --git a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+index 4e237a6..ce44612 100644
+--- a/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
++++ b/src/rust_frontend/vf_mir_translator/vf_mir_translator.ml
+@@ -484,9 +484,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+     let annot : Mir.annot = { span; raw } in
+     Ok annot
+ 
++  (* In a function of an inherent impl block, the name that stands for Self in
++     ghost code, applied to the impl's generic parameters. *)
++  let self_type_alias : string option ref = ref None
++
++  (* Replaces each occurrence of the identifier Self in [raw] with [alias]. *)
++  let replace_self_ident alias raw =
++    let is_ident_char c =
++      match c with 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false
++    in
++    let n = String.length raw in
++    let buf = Buffer.create n in
++    let rec iter i =
++      if i >= n then ()
++      else if i + 4 <= n && String.sub raw i 4 = "Self"
++              && (i = 0 || not (is_ident_char raw.[i - 1]))
++              && (i + 4 = n || not (is_ident_char raw.[i + 4])) then begin
++        Buffer.add_string buf alias;
++        iter (i + 4)
++      end else begin
++        Buffer.add_char buf raw.[i];
++        iter (i + 1)
++      end
++    in
++    iter 0;
++    Buffer.contents buf
++
+   let translate_annot_to_vf_parser_inp ({ span; raw } : Mir.annot) =
+     let spos, epos = Ast.lexed_loc span in
+-    (spos, raw)
++    match !self_type_alias with
++    | None -> (spos, raw)
++    | Some alias -> (spos, replace_self_ident alias raw)
+ 
+   let translate_contract (contract_cpn : ContractRd.t) =
+     let open ContractRd in
+@@ -4801,7 +4829,31 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+                     (TraitRd.RequiredFn.contract_get required_fn_cpn)))
+       else required_fns
+     in
+-    ListAux.try_map (translate_trait_required_fn adt_defs name) required_fns
++    let* required_fn_decls =
++      ListAux.try_map (translate_trait_required_fn adt_defs name) required_fns
++    in
++    (* <T as Trait>::Assoc has typeid Trait::Assoc_typeid<T>(), as for traits
++       declared in .rsspec files. *)
++    let assoc_typeid_decls =
++      TraitRd.sized_assoc_types_get_list trait_cpn
++      |> List.map (fun assoc_type ->
++             let loc = Ast.dummy_loc in
++             Ast.Func
++               ( loc,
++                 Ast.Fixpoint,
++                 Ast.unbounded_tparams [ "Self" ],
++                 Some (Ast.PtrTypeExpr (loc, Ast.ManifestTypeExpr (loc, Ast.Void))),
++                 Printf.sprintf "%s::%s_typeid" name assoc_type,
++                 [],
++                 false,
++                 (None, None),
++                 None,
++                 false,
++                 None,
++                 false,
++                 [] ))
++    in
++    Ok (assoc_typeid_decls @ required_fn_decls)
+ 
+   let decode_clause (clause_cpn : D.clause) =
+     match clause_cpn with
+@@ -8109,12 +8161,37 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+       let body_tr_defs_ctx =
+         { adt_defs; directives = vf_mir_translator_directives; fn_specializer }
+       in
++      (* Ghost code in an inherent impl refers to the impl's self type as Self. Each
++         such function gets a type alias for it, generic over the impl's parameters. *)
++      let self_alias_decls = ref [] in
+       let* bodies_tr_res =
+         Rocq_writer.rocq_print Args.rocq_writer "Definition bodies := ";
+         Rocq_writer.rocq_print_big_list Args.rocq_writer @@ fun () ->
+-        bodies_cpn |> ListAux.try_map @@ fun body_cpn ->
++        bodies_cpn |> List.mapi (fun i body_cpn -> (i, body_cpn)) |> ListAux.try_map @@ fun (i, body_cpn) ->
+           Rocq_writer.rocq_print_big_list_element Args.rocq_writer @@ fun () ->
+-          translate_body body_tr_defs_ctx body_cpn
++          let* () =
++            if BodyRd.is_inherent_impl_fn_get body_cpn then begin
++              let* loc = translate_span_data (BodyRd.fn_sig_span_get body_cpn) in
++              let* self_ty = translate_ty (BodyRd.inherent_impl_self_ty_get body_cpn) loc in
++              let impl_params =
++                BodyRd.impl_block_generics_get_list body_cpn
++                |> List.map translate_generic_param_def |> List.map fst
++              in
++              let alias = Printf.sprintf "Self__%d" i in
++              let module_path = BodyRd.module_def_path_get body_cpn in
++              let full_name = if module_path = "" then alias else module_path ^ "::" ^ alias in
++              self_alias_decls := Ast.TypedefDecl (loc, self_ty.vf_ty, full_name, impl_params) :: !self_alias_decls;
++              self_type_alias :=
++                Some (if impl_params = [] then alias else alias ^ "<" ^ String.concat ", " impl_params ^ ">");
++              Ok ()
++            end else begin
++              self_type_alias := None;
++              Ok ()
++            end
++          in
++          let result = translate_body body_tr_defs_ctx body_cpn in
++          self_type_alias := None;
++          result
+       in
+       Rocq_writer.rocq_print Args.rocq_writer ".\n";
+       let body_sig_opts, body_decls, debug_infos =
+@@ -8138,7 +8215,7 @@ module Make (Args : VF_MIR_TRANSLATOR_ARGS) = struct
+       let decls =
+         List.map
+           (modularize_decl module_imports_map)
+-          (ty_alias_decls @ traits_decls @ trait_impl_prototypes @ adt_decls @ aux_decls
++          (ty_alias_decls @ !self_alias_decls @ traits_decls @ trait_impl_prototypes @ adt_decls @ aux_decls
+          @ adts_full_bor_content_preds @ adts_proof_obligs)
+         @ ghost_decls
+         @ List.map
+diff --git a/src/verifast1.ml b/src/verifast1.ml
+index 18dda06..920e317 100644
+--- a/src/verifast1.ml
++++ b/src/verifast1.ml
+@@ -2473,6 +2473,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+     in
+     iter [] structmap0 [] (List.rev structdeclmap)
+ 
++  let sized_projection_typeids =
++    ps |> flatmap @@ fun (PackageDecl (_, pn, _, ds)) ->
++      ds |> flatmap @@ function
++        Func (_, Fixpoint, _, _, g, [], _, _, _, _, None, _, _) ->
++          [if pn = "" then g else pn ^ "::" ^ g]
++      | _ -> []
++
+   let struct_sizedness_map1 =
+     let rec sizedness_of_type t: (bool, string) Either.t =
+       match unfold_inferred_type t with
+@@ -2491,7 +2498,14 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
+       | BoundedGhostTypeParam (x, _) -> Right x
+       | InferredType _ -> failwith "sizedness_of_type: called on unresolved inferred type"
+       | ProjectionType (t, traitName, traitArgs, assocTypeName) ->
+-        failwith "sizedness_of_type: TODO: projection types"
++        (* Only Sized associated types receive a typeid function: the Rust
++           frontend exports them from the trait's item bounds, and .rsspec
++           files cannot declare ?Sized associated types. Other projections
++           are still rejected. *)
++        if List.mem (traitName ^ "::" ^ assocTypeName ^ "_typeid") sized_projection_typeids then
++          Left true
++        else
++          failwith "sizedness_of_type: TODO: projection types"
+     and get_struct_sizedness sn =
+       match try_assoc sn struct_sizedness_map1 with
+         Some (l, state_ref) -> finish_struct_sizedness_checking l sn state_ref
+diff --git a/tests/rust/assoc_type_projection.rs b/tests/rust/assoc_type_projection.rs
+new file mode 100644
+index 0000000..0d79f19
+--- /dev/null
++++ b/tests/rust/assoc_type_projection.rs
+@@ -0,0 +1,30 @@
++// A struct whose field type is a projection of an associated type with an
++// explicit or implicit Sized bound.
++use std::cell::UnsafeCell;
++
++pub trait Primitive {
++    type Storage;
++}
++
++pub trait ExplicitlySized {
++    type Storage: Sized;
++}
++
++impl Primitive for u8 {
++    type Storage = u8;
++}
++
++#[repr(C)]
++pub struct Cell<T: Primitive> {
++    v: UnsafeCell<T::Storage>,
++}
++
++#[repr(C)]
++pub struct Cell2<T: ExplicitlySized> {
++    v: T::Storage,
++}
++
++pub fn smoke()
++//@ req true;
++//@ ens true;
++{}
+diff --git a/tests/rust/self_in_ghost.rs b/tests/rust/self_in_ghost.rs
+new file mode 100644
+index 0000000..2c50299
+--- /dev/null
++++ b/tests/rust/self_in_ghost.rs
+@@ -0,0 +1,50 @@
++// Ghost code in an inherent impl can refer to the impl's self type as Self.
++pub struct Wrap<T> {
++    x: T,
++}
++
++impl Wrap<u16> {
++    pub fn size() -> usize
++    //@ req true;
++    //@ ens result == std::mem::size_of::<Self>();
++    {
++        std::mem::size_of::<Wrap<u16>>()
++    }
++}
++
++impl<T> Wrap<T> {
++    pub fn identity(p: *mut Wrap<T>) -> *mut Wrap<T>
++    //@ req true;
++    //@ ens result == p as *Self;
++    {
++        p
++    }
++}
++
++// In a macro, Self is the only way for ghost code to name each expansion's type.
++macro_rules! sized {
++    ($t:ty) => {
++        impl Wrap<$t> {
++            pub fn size_of_self() -> usize
++            //@ req true;
++            //@ ens result == std::mem::size_of::<Self>();
++            {
++                std::mem::size_of::<Wrap<$t>>()
++            }
++        }
++    };
++}
++
++sized!(u8);
++sized!(u64);
++
++impl Wrap<u32> {
++    pub fn wrong_size() -> usize
++    //@ req true;
++    //@ ens result == std::mem::size_of::<Self>(); //~should_fail
++    {
++        std::mem::size_of::<Wrap<u8>>()
++    }
++}
++
++fn main() {}
+diff --git a/tests/rust/testsuite.mysh b/tests/rust/testsuite.mysh
+index c3b6b0b..61fc95d 100644
+--- a/tests/rust/testsuite.mysh
++++ b/tests/rust/testsuite.mysh
+@@ -17,8 +17,10 @@ verifast -allow_should_fail -allow_dead_code assume_stmt.rs
+ verifast hidden_locals.rs
+ verifast -allow_should_fail -allow_dead_code this_pred.rs
+ verifast use_decls_in_modules.rs
++verifast -skip_specless_fns assoc_type_projection.rs
+ verifast -allow_should_fail -allow_assume -allow_dead_code pred_ctor_generic_args.rs
+ verifast -allow_should_fail macro_fn_specs.rs
++verifast -allow_should_fail self_in_ghost.rs
+ verifast -allow_should_fail -allow_dead_code pred_ctor_infer_targs.rs
+ begin_sequential
+ cd unverified
